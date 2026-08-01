@@ -1,0 +1,9 @@
+/docs export-ignore
+/fixtures export-ignore
+/tests export-ignore
+/.dex export-ignore
+/.gitignore export-ignore
+/AGENTS.md export-ignore
+/phpcs.xml export-ignore
+/phpstan.neon export-ignore
+/phpunit.xml export-ignore

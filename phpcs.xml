@@ -1,0 +1,27 @@
+<?xml version="1.0"?>
+<ruleset name="RAN WP GitHub Release Updater">
+	<description>WordPress coding standards for the updater package.</description>
+
+	<file>bootstrap.php</file>
+	<file>runtime.php</file>
+	<file>src</file>
+	<file>tests</file>
+
+	<exclude-pattern>vendor/*</exclude-pattern>
+
+	<arg name="basepath" value="."/>
+	<arg name="extensions" value="php"/>
+	<arg name="parallel" value="8"/>
+
+	<rule ref="WordPress-Core">
+		<!-- Public V1 names and PSR-style namespaced class files are deliberate. -->
+		<exclude name="WordPress.Files.FileName.InvalidClassFileName"/>
+		<exclude name="WordPress.Files.FileName.NotHyphenatedLowercase"/>
+		<exclude name="WordPress.NamingConventions.ValidFunctionName.MethodNameInvalid"/>
+		<exclude name="WordPress.NamingConventions.ValidVariableName"/>
+	</rule>
+
+	<rule ref="Generic.Files.OneObjectStructurePerFile.MultipleFound">
+		<exclude-pattern>tests/*</exclude-pattern>
+	</rule>
+</ruleset>
