@@ -3,6 +3,9 @@
 A Composer library that lets WordPress plugins and themes offer updates from
 exact GitHub Release assets through WordPress Core's native update lifecycle.
 
+The public source lineage restarts with `1.6.0-beta.1`. Earlier prerelease
+identities are retired and must not be reused by consumers or publishers.
+
 Released changes are recorded in the Release Please-owned
 [CHANGELOG.md](CHANGELOG.md). Accepted unreleased Conventional Commits are
 summarized in the active Release Please proposal; dirty local work is in
