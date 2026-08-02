@@ -9,10 +9,14 @@
 # Private Booster-family planning and review material belongs in the
 # Core-adjacent private workbench, never in this distributable source repo.
 /.agents/plans/
+/.agents/decks/
+/.agents/blueprints/
 /docs/plans/
 /docs/proposals/
 /docs/reviews/
 /docs/proofs/
+/docs/decks/
+/docs/blueprints/
 /docs/*-decision-register.md
 /docs/*-phase[0-9]-evidence.md
 /docs/executive-roadmap.md
