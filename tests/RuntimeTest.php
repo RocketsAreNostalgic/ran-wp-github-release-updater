@@ -79,7 +79,7 @@ final class RuntimeTest extends TestCase {
 
 		$diagnostics = $updater->diagnostics();
 		self::assertTrue( $diagnostics['registered'] );
-		self::assertSame( '1.5.0-beta.12', $diagnostics['selected_version'] ); // x-release-please-version
+		self::assertSame( '1.6.0-beta.1', $diagnostics['selected_version'] ); // x-release-please-version
 		self::assertSame( 'not_checked', $diagnostics['code'] );
 		self::assertSame( 'RocketsAreNostalgic/booster-fixture-plugin', $diagnostics['repository'] );
 	}
@@ -115,7 +115,7 @@ final class RuntimeTest extends TestCase {
 
 		$diagnostics = $updater->diagnostics();
 		self::assertTrue( $diagnostics['registered'] );
-		self::assertSame( '1.5.0-beta.12', $diagnostics['selected_version'] ); // x-release-please-version
+		self::assertSame( '1.6.0-beta.1', $diagnostics['selected_version'] ); // x-release-please-version
 		self::assertSame( 'inactive', $diagnostics['state'] );
 		self::assertSame( 'native_discovery_disabled', $diagnostics['code'] );
 	}
