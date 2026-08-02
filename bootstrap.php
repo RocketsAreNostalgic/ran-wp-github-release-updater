@@ -18,7 +18,7 @@ declare(strict_types=1);
 
 $ran_wp_github_release_updater_candidate = array(
 	'broker_protocol' => 1,
-	'package_version' => '1.5.0-beta.12', // x-release-please-version
+	'package_version' => '1.6.0-beta.1', // x-release-please-version
 	'php_floor'       => '8.2.0',
 	'wordpress_floor' => '6.5',
 	'path'            => __DIR__,
