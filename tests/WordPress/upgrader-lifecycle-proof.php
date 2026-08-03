@@ -111,6 +111,15 @@ final class RanUpdaterLifecycleFailingFilesystem extends WP_Filesystem_Direct {
 	public function copy( $source, $destination, $overwrite = false, $mode = false ) {
 		$destination = rtrim( str_replace( '\\', '/', (string) $destination ), '/' );
 		if ( str_ends_with( $destination, '/themes/' . $this->theme_slug . '/zz-copy-failure.php' ) ) {
+			// Filesystem iteration order is not stable across hosts. Copy the new
+			// header explicitly so the injected failure always reaches the same
+			// partially replaced state before Core restores the temporary backup.
+			parent::copy(
+				dirname( (string) $source ) . '/style.css',
+				dirname( $destination ) . '/style.css',
+				true,
+				$mode
+			);
 			return false;
 		}
 
