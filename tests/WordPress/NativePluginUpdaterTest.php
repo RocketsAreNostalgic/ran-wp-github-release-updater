@@ -20,6 +20,9 @@ use RAN\WPGitHubReleaseUpdater\V1\WordPress\CandidateValidation;
 use RAN\WPGitHubReleaseUpdater\V1\WordPress\NativePluginUpdater;
 use RAN\WPGitHubReleaseUpdater\V1\WordPress\ReleaseArtifactClient;
 use RAN\WPGitHubReleaseUpdater\V1\WordPress\ReleaseAssurance;
+use RAN\WPGitHubReleaseUpdater\V1\WordPress\ReleaseOperationClaim;
+use RAN\WPGitHubReleaseUpdater\V1\WordPress\ReleaseOperationCoordinator;
+use Tests\Support\FakeWpdb;
 use Tests\Support\WordPressState;
 
 spl_autoload_register(
@@ -43,6 +46,8 @@ spl_autoload_register(
 final class NativePluginUpdaterTest extends TestCase {
 
 	private const PLUGIN_BASENAME = 'example-plugin/example-plugin.php';
+	private const DISCOVERY_LEASE = 'RAN_WP_GITHUB_RELEASE_UPDATER_DISCOVERY_LEASE_SECONDS';
+	private const INSTALL_LEASE   = 'RAN_WP_GITHUB_RELEASE_UPDATER_INSTALL_LEASE_SECONDS';
 
 	private string $pluginFile;
 	private int $now = 1000;
@@ -50,6 +55,8 @@ final class NativePluginUpdaterTest extends TestCase {
 	protected function setUp(): void {
 		parent::setUp();
 		WordPressState::reset();
+		putenv( self::DISCOVERY_LEASE );
+		putenv( self::INSTALL_LEASE );
 		$GLOBALS['wp_version'] = '6.5';
 		$this->now             = 1000;
 		$this->pluginFile      = dirname( __DIR__, 2 )
@@ -67,6 +74,12 @@ final class NativePluginUpdaterTest extends TestCase {
 		);
 	}
 
+	protected function tearDown(): void {
+		putenv( self::DISCOVERY_LEASE );
+		putenv( self::INSTALL_LEASE );
+		parent::tearDown();
+	}
+
 	public function testRegistersOnlyTheBetaNativeHooksIdempotently(): void {
 		$updater = $this->updater( new FakeReleaseArtifactClient( $this->descriptor() ) );
 
@@ -77,6 +90,7 @@ final class NativePluginUpdaterTest extends TestCase {
 		self::assertSame( 1, WordPressState::hookCount( 'plugins_api' ) );
 		self::assertSame( 1, WordPressState::hookCount( 'auto_update_plugin' ) );
 		self::assertSame( 1, WordPressState::hookCount( 'upgrader_pre_download' ) );
+		self::assertSame( 1, WordPressState::hookCount( 'upgrader_pre_install' ) );
 		self::assertSame( 1, WordPressState::hookCount( 'upgrader_source_selection' ) );
 		self::assertSame( 1, WordPressState::hookCount( 'upgrader_process_complete' ) );
 		self::assertSame( 1, WordPressState::hookCount( 'admin_notices' ) );
@@ -148,9 +162,21 @@ final class NativePluginUpdaterTest extends TestCase {
 			)
 		);
 
-		$target['autoUpdatePolicy'] = 'automatic';
-		$automatic                  = NativePluginUpdater::fromTarget( $target, $client );
+		$target['autoUpdatePolicy']     = 'automatic';
+		$target['providerRepositoryId'] = '987654321';
+		$automaticClient                = new FakeReleaseArtifactClient(
+			$this->themeDescriptor( providerRepositoryId: '987654321' )
+		);
+		$automatic                      = NativePluginUpdater::fromTarget( $target, $automaticClient );
 		self::assertInstanceOf( NativePluginUpdater::class, $automatic );
+		self::assertIsArray(
+			$automatic->filterUpdate(
+				false,
+				array( 'Version' => '1.0.0' ),
+				'locally-renamed-theme',
+				array()
+			)
+		);
 		self::assertTrue(
 			$automatic->filterAutoUpdate(
 				false,
@@ -228,7 +254,7 @@ final class NativePluginUpdaterTest extends TestCase {
 		self::assertNull( $updater->diagnostics()['offered_version'] );
 		self::assertArrayNotHasKey(
 			'offer',
-			array_values( WordPressState::$siteTransients )[0]
+			$this->nativeState( $updater )
 		);
 		wp_delete_file( $path );
 	}
@@ -259,7 +285,7 @@ final class NativePluginUpdaterTest extends TestCase {
 		self::assertSame( 1, $client->describeCalls );
 		self::assertSame( 1, $client->acquireCalls );
 
-		$cached = array_values( WordPressState::$siteTransients )[0] ?? null;
+		$cached = $this->nativeState( $updater );
 		self::assertIsArray( $cached );
 		self::assertArrayNotHasKey( 'descriptor', $cached );
 		self::assertArrayNotHasKey( 'path', $cached );
@@ -283,7 +309,7 @@ final class NativePluginUpdaterTest extends TestCase {
 			)
 		);
 
-		$state = array_values( WordPressState::$siteTransients )[0] ?? null;
+		$state = $this->nativeState( $updater );
 		self::assertIsArray( $state );
 		self::assertSame( 'current', $state['status'] );
 		self::assertArrayNotHasKey( 'offer', $state );
@@ -399,7 +425,7 @@ final class NativePluginUpdaterTest extends TestCase {
 		self::assertSame( 3, $client->listCalls );
 		self::assertSame( 3, $client->describeCalls );
 		self::assertSame( 0, $client->acquireCalls );
-		$state = array_values( WordPressState::$siteTransients )[0];
+		$state = $this->nativeState( $updater );
 		self::assertSame( 'current', $state['status'] );
 		self::assertSame( 44_202, $state['checked_at'] );
 		self::assertSame( '1.2.3', $state['current']['version'] );
@@ -456,7 +482,7 @@ final class NativePluginUpdaterTest extends TestCase {
 				array()
 			)
 		);
-		$state = array_values( WordPressState::$siteTransients )[0];
+		$state = $this->nativeState( $updater );
 		self::assertSame(
 			array(
 				'etag'          => null,
@@ -491,14 +517,14 @@ final class NativePluginUpdaterTest extends TestCase {
 		self::assertIsArray( $beta );
 		self::assertSame( '1.2.3-beta.2', $beta['version'] );
 
-		WordPressState::$siteTransients = array();
-		$stableClient                   = new FakeReleaseArtifactClient( $this->descriptor() );
-		$stableUpdater                  = $this->updater(
+		$this->setNativeState( $betaUpdater, array() );
+		$stableClient  = new FakeReleaseArtifactClient( $this->descriptor() );
+		$stableUpdater = $this->updater(
 			$stableClient,
 			'site-controlled',
 			'prerelease'
 		);
-		$stable                         = $stableUpdater->filterUpdate(
+		$stable        = $stableUpdater->filterUpdate(
 			false,
 			array( 'Version' => '1.2.3-beta.2' ),
 			self::PLUGIN_BASENAME,
@@ -506,6 +532,41 @@ final class NativePluginUpdaterTest extends TestCase {
 		);
 		self::assertIsArray( $stable );
 		self::assertSame( '1.2.3', $stable['version'] );
+	}
+
+	/**
+	 * @dataProvider semanticPrereleaseProgressionProvider
+	 */
+	public function testPrereleaseChannelUsesSemanticProgression(
+		string $installed,
+		string $candidate
+	): void {
+		$client  = new FakeReleaseArtifactClient( $this->descriptor( true, $candidate ) );
+		$updater = $this->updater( $client, 'site-controlled', 'prerelease' );
+
+		$result = $updater->filterUpdate(
+			false,
+			array( 'Version' => $installed ),
+			self::PLUGIN_BASENAME,
+			array()
+		);
+
+		self::assertIsArray( $result );
+		self::assertSame( $candidate, $result['version'] );
+	}
+
+	/**
+	 * @return array<string, array{string, string}>
+	 */
+	public static function semanticPrereleaseProgressionProvider(): array {
+		return array(
+			'alphabetic identifiers'      => array( '1.0.0-x.1', '1.0.0-y.1' ),
+			'numeric before alphanumeric' => array( '1.0.0-1', '1.0.0-alpha' ),
+			'huge numeric identifier'     => array(
+				'1.0.0-99999999999999999999',
+				'1.0.0-100000000000000000000',
+			),
+		);
 	}
 
 	public function testCachedPrereleaseOfferRehydratesWithoutRemoteWork(): void {
@@ -542,10 +603,9 @@ final class NativePluginUpdaterTest extends TestCase {
 				array()
 			)
 		);
-		$cacheKey = array_key_first( WordPressState::$siteTransients );
-		self::assertIsString( $cacheKey );
-		WordPressState::$siteTransients[ $cacheKey ]['offer']['candidate_validation']['identity']['tag'] =
-			'v1.2.2';
+		$state = $this->nativeState( $updater );
+		$state['offer']['candidate_validation']['identity']['tag'] = 'v1.2.2';
+		$this->setNativeState( $updater, $state );
 
 		self::assertNull( $updater->diagnostics()['candidate_validation'] );
 		self::assertIsArray(
@@ -784,7 +844,7 @@ final class NativePluginUpdaterTest extends TestCase {
 		self::assertSame( 'rate_limited', $updater->diagnostics()['code'] );
 		self::assertSame( '1.2.3', $updater->diagnostics()['offered_version'] );
 		self::assertSame( 2, $client->listCalls );
-		self::assertSame( 21720, array_values( WordPressState::$siteTransientExpirations )[0] );
+		self::assertSame( $this->now + 120, $this->nativeState( $updater )['cooldown_until'] );
 	}
 
 	public function testDiscoveryAuthenticationFailurePreservesIncomingFilterTruth(): void {
@@ -948,7 +1008,7 @@ final class NativePluginUpdaterTest extends TestCase {
 			array()
 		);
 		self::assertIsArray( $first );
-		self::assertSame( 108000, array_values( WordPressState::$siteTransientExpirations )[0] );
+		self::assertSame( 'available', $this->nativeState( $updater )['status'] );
 
 		$this->now              = 22601;
 		$client->nextListResult = new ReleaseListResult(
@@ -968,7 +1028,7 @@ final class NativePluginUpdaterTest extends TestCase {
 		self::assertSame( 2, $client->listCalls );
 		self::assertSame( 2, $client->describeCalls );
 		self::assertSame( 2, $client->acquireCalls );
-		$state = array_values( WordPressState::$siteTransients )[0];
+		$state = $this->nativeState( $updater );
 		self::assertSame( 22601, $state['checked_at'] );
 		self::assertSame( '"etag"', $state['conditional']['etag'] );
 		self::assertSame(
@@ -989,13 +1049,11 @@ final class NativePluginUpdaterTest extends TestCase {
 			)
 		);
 
-		$cacheKey = array_key_first( WordPressState::$siteTransients );
-		self::assertIsString( $cacheKey );
-		$state                                       = WordPressState::$siteTransients[ $cacheKey ];
-		$state['conditional']['etag']                = "\"cached\r\nX-Injected: yes\"";
-		$state['conditional']['last_modified']       = "Thu, 24 Jul 2026 12:00:00 GMT\r\nX-Injected: yes";
-		WordPressState::$siteTransients[ $cacheKey ] = $state;
-		$this->now                                   = 22_601;
+		$state                                 = $this->nativeState( $updater );
+		$state['conditional']['etag']          = "\"cached\r\nX-Injected: yes\"";
+		$state['conditional']['last_modified'] = "Thu, 24 Jul 2026 12:00:00 GMT\r\nX-Injected: yes";
+		$this->setNativeState( $updater, $state );
+		$this->now = 22_601;
 
 		$updater->filterUpdate(
 			false,
@@ -1121,8 +1179,26 @@ final class NativePluginUpdaterTest extends TestCase {
 				(object) array( 'plugin' => self::PLUGIN_BASENAME )
 			)
 		);
+		$automaticTarget                         = $this->target();
+		$automaticTarget['autoUpdatePolicy']     = 'forced-on';
+		$automaticTarget['providerRepositoryId'] = '123456789';
+		$automatic                               = NativePluginUpdater::fromTarget(
+			$automaticTarget,
+			new FakeReleaseArtifactClient(
+				$this->descriptor( providerRepositoryId: '123456789' )
+			)
+		);
+		self::assertInstanceOf( NativePluginUpdater::class, $automatic );
+		self::assertIsArray(
+			$automatic->filterUpdate(
+				false,
+				array( 'Version' => '1.0.0' ),
+				self::PLUGIN_BASENAME,
+				array()
+			)
+		);
 		self::assertTrue(
-			$this->updater( $client, 'forced-on' )->filterAutoUpdate(
+			$automatic->filterAutoUpdate(
 				false,
 				(object) array( 'plugin' => self::PLUGIN_BASENAME )
 			)
@@ -1133,6 +1209,110 @@ final class NativePluginUpdaterTest extends TestCase {
 				(object) array( 'plugin' => 'other/other.php' )
 			)
 		);
+	}
+
+	public function testAutomaticPolicyRejectsAnOfferWithoutAStableRepositoryIdentity(): void {
+		$updater = $this->updater(
+			new FakeReleaseArtifactClient( $this->descriptor() ),
+			'automatic'
+		);
+
+		self::assertFalse(
+			$updater->filterUpdate(
+				false,
+				array( 'Version' => '1.0.0' ),
+				self::PLUGIN_BASENAME,
+				array()
+			)
+		);
+		self::assertFalse(
+			$updater->filterAutoUpdate(
+				true,
+				(object) array( 'plugin' => self::PLUGIN_BASENAME )
+			)
+		);
+		self::assertSame(
+			'github_updater_automatic_repository_identity_required',
+			$updater->diagnostics()['code']
+		);
+		self::assertFalse( $updater->diagnostics()['automatic_eligible'] );
+	}
+
+	public function testSiteControlledNativeAutoUpdateRequiresTheAutomaticProfile(): void {
+		$target                         = $this->target();
+		$target['providerRepositoryId'] = '123456789';
+		$updater                        = NativePluginUpdater::fromTarget(
+			$target,
+			new FakeReleaseArtifactClient(
+				$this->descriptor( providerRepositoryId: '123456789', immutable: false )
+			)
+		);
+		self::assertInstanceOf( NativePluginUpdater::class, $updater );
+		self::assertIsArray(
+			$updater->filterUpdate(
+				false,
+				array( 'Version' => '1.0.0' ),
+				self::PLUGIN_BASENAME,
+				array()
+			)
+		);
+		self::assertFalse(
+			$updater->filterAutoUpdate(
+				true,
+				(object) array( 'plugin' => self::PLUGIN_BASENAME )
+			)
+		);
+
+		$immutableTarget                         = $target;
+		$immutableTarget['providerRepositoryId'] = '987654321';
+		$immutable                               = NativePluginUpdater::fromTarget(
+			$immutableTarget,
+			new FakeReleaseArtifactClient(
+				$this->descriptor( providerRepositoryId: '987654321', immutable: true )
+			)
+		);
+		self::assertInstanceOf( NativePluginUpdater::class, $immutable );
+		self::assertIsArray(
+			$immutable->filterUpdate(
+				false,
+				array( 'Version' => '1.0.0' ),
+				self::PLUGIN_BASENAME,
+				array()
+			)
+		);
+		self::assertTrue(
+			$immutable->filterAutoUpdate(
+				true,
+				(object) array( 'plugin' => self::PLUGIN_BASENAME )
+			)
+		);
+	}
+
+	public function testAutomaticPolicyRejectsAMutablePublishedRelease(): void {
+		$target                         = $this->target();
+		$target['autoUpdatePolicy']     = 'automatic';
+		$target['providerRepositoryId'] = '123456789';
+		$updater                        = NativePluginUpdater::fromTarget(
+			$target,
+			new FakeReleaseArtifactClient(
+				$this->descriptor( providerRepositoryId: '123456789', immutable: false )
+			)
+		);
+		self::assertInstanceOf( NativePluginUpdater::class, $updater );
+
+		self::assertFalse(
+			$updater->filterUpdate(
+				false,
+				array( 'Version' => '1.0.0' ),
+				self::PLUGIN_BASENAME,
+				array()
+			)
+		);
+		self::assertSame(
+			'github_updater_automatic_immutable_release_required',
+			$updater->diagnostics()['code']
+		);
+		self::assertFalse( $updater->diagnostics()['automatic_eligible'] );
 	}
 
 	public function testReturnsLeanDetailsForTheExactSlugOnly(): void {
@@ -1297,6 +1477,7 @@ final class NativePluginUpdaterTest extends TestCase {
 		);
 		self::assertSame( 0, WordPressState::hookCount( 'pre_unzip_file' ) );
 		wp_delete_file( $path );
+		$updater->observeCompletion( null, array() );
 
 		$path = $updater->filterPreDownload(
 			false,
@@ -1420,6 +1601,11 @@ final class NativePluginUpdaterTest extends TestCase {
 			apply_filters( 'upgrader_pre_download', false, $path, null, $extra )
 		);
 		self::assertSame( 1, WordPressState::hookCount( 'pre_unzip_file' ) );
+		self::assertSame(
+			'/stage/core-handoff/',
+			$updater->filterSourceSelection( '/stage/core-handoff/', '/stage/', null, $extra )
+		);
+		$updater->observeCompletion( null, array() );
 	}
 
 	/**
@@ -1515,7 +1701,8 @@ final class NativePluginUpdaterTest extends TestCase {
 				array( 'plugin' => self::PLUGIN_BASENAME )
 			)
 		);
-		wp_delete_file( $path );
+		$updater->observeCompletion( null, array() );
+		self::assertFileDoesNotExist( $path );
 	}
 
 	public function testPriorExtractionErrorClearsPendingInstall(): void {
@@ -1540,6 +1727,7 @@ final class NativePluginUpdaterTest extends TestCase {
 			$prior,
 			$updater->filterPreUnzipFile( $prior, $path, '/stage', array(), 1024.0 )
 		);
+		self::assertFileDoesNotExist( $path );
 
 		$GLOBALS['wp_filesystem'] = new FakeWordPressFilesystem( '/stage/' );
 		self::assertSame(
@@ -1551,7 +1739,6 @@ final class NativePluginUpdaterTest extends TestCase {
 				array( 'plugin' => self::PLUGIN_BASENAME )
 			)
 		);
-		wp_delete_file( $path );
 	}
 
 	public function testNonMatchingArchiveDoesNotConsumeExtractionState(): void {
@@ -2030,10 +2217,10 @@ final class NativePluginUpdaterTest extends TestCase {
 
 		self::assertSame( 1, $publicClient->listCalls );
 		self::assertSame( 1, $privateClient->listCalls );
-		self::assertCount( 2, WordPressState::$siteTransients );
+		self::assertSame( 1, $this->authorityRowCount() );
 		self::assertStringNotContainsString(
 			'request-scoped-secret',
-			serialize( WordPressState::$siteTransients )
+			serialize( $GLOBALS['wpdb']->rows )
 		);
 	}
 
@@ -2072,7 +2259,7 @@ final class NativePluginUpdaterTest extends TestCase {
 
 		self::assertSame( 1, $firstClient->listCalls );
 		self::assertSame( 1, $secondClient->listCalls );
-		self::assertCount( 2, WordPressState::$siteTransients );
+		self::assertSame( 1, $this->authorityRowCount() );
 	}
 
 	public function testOldCacheSchemaIsNotReused(): void {
@@ -2086,9 +2273,9 @@ final class NativePluginUpdaterTest extends TestCase {
 				array()
 			)
 		);
-		$cacheKey = array_key_first( WordPressState::$siteTransients );
-		self::assertIsString( $cacheKey );
-		WordPressState::$siteTransients[ $cacheKey ]['schema'] = 5;
+		$state           = $this->nativeState( $firstUpdater );
+		$state['schema'] = 5;
+		$this->setNativeState( $firstUpdater, $state );
 
 		$secondClient  = new FakeReleaseArtifactClient( $this->descriptor() );
 		$secondUpdater = $this->updater( $secondClient );
@@ -2137,7 +2324,7 @@ final class NativePluginUpdaterTest extends TestCase {
 		self::assertSame( '1.2.4', $corrected['version'] );
 		self::assertSame( 1, $correctedClient->listCalls );
 		self::assertSame( 1, $correctedClient->acquireCalls );
-		self::assertCount( 2, WordPressState::$siteTransients );
+		self::assertSame( 2, $this->authorityRowCount() );
 	}
 
 	public function testChangedWordPressVersionDoesNotReuseACachedOffer(): void {
@@ -2166,7 +2353,7 @@ final class NativePluginUpdaterTest extends TestCase {
 		self::assertSame( '1.2.4', $corrected['version'] );
 		self::assertSame( 1, $correctedClient->listCalls );
 		self::assertSame( '6.6', $correctedClient->lastListQuery->wordpressVersion() );
-		self::assertCount( 2, WordPressState::$siteTransients );
+		self::assertSame( 1, $this->authorityRowCount() );
 	}
 
 	public function testDummyPluginShowsEveryExplicitConstructorOption(): void {
@@ -2190,6 +2377,214 @@ final class NativePluginUpdaterTest extends TestCase {
 		}
 	}
 
+	public function testExpiredInstallFenceFailsClosedAtPreInstallAndCleansArchive(): void {
+		$client  = new FakeReleaseArtifactClient( $this->descriptor() );
+		$updater = $this->updater( $client );
+		$update  = $updater->filterUpdate(
+			false,
+			array( 'Version' => '1.0.0' ),
+			self::PLUGIN_BASENAME,
+			array()
+		);
+		self::assertIsArray( $update );
+		$path = $updater->filterPreDownload(
+			false,
+			$update['package'],
+			null,
+			array( 'plugin' => self::PLUGIN_BASENAME )
+		);
+		self::assertIsString( $path );
+		$database = $GLOBALS['wpdb'];
+		self::assertInstanceOf( FakeWpdb::class, $database );
+		$database->now += 3610;
+
+		$result = $updater->filterPreInstall( true, array( 'plugin' => self::PLUGIN_BASENAME ) );
+		self::assertInstanceOf( \WP_Error::class, $result );
+		self::assertSame( 'github_updater_operation_fence_lost', $result->get_error_code() );
+		self::assertFileDoesNotExist( $path );
+	}
+
+	public function testNativeDiscoveryUsesEnvironmentOverride(): void {
+		putenv( self::DISCOVERY_LEASE . '=60' );
+		$client            = new FakeReleaseArtifactClient( $this->descriptor() );
+		$client->afterList = static function (): void {
+			$database = $GLOBALS['wpdb'];
+			self::assertInstanceOf( FakeWpdb::class, $database );
+			$database->now += 61;
+		};
+		$updater           = $this->updater( $client );
+
+		$result = $updater->filterUpdate(
+			false,
+			array( 'Version' => '1.0.0' ),
+			self::PLUGIN_BASENAME,
+			array()
+		);
+
+		self::assertFalse( $result );
+		self::assertSame( 1, $client->listCalls );
+	}
+
+	public function testDefaultInstallFenceRemainsOwnedBeyondDiscoveryLease(): void {
+		$client  = new FakeReleaseArtifactClient( $this->descriptor() );
+		$updater = $this->updater( $client );
+		$update  = $updater->filterUpdate(
+			false,
+			array( 'Version' => '1.0.0' ),
+			self::PLUGIN_BASENAME,
+			array()
+		);
+		self::assertIsArray( $update );
+		$path = $updater->filterPreDownload(
+			false,
+			$update['package'],
+			null,
+			array( 'plugin' => self::PLUGIN_BASENAME )
+		);
+		self::assertIsString( $path );
+		$database = $GLOBALS['wpdb'];
+		self::assertInstanceOf( FakeWpdb::class, $database );
+		$database->now += 601;
+
+		self::assertTrue(
+			$updater->filterPreInstall( true, array( 'plugin' => self::PLUGIN_BASENAME ) )
+		);
+		$database->now += 3601;
+		$expired        = $updater->filterPreInstall( true, array( 'plugin' => self::PLUGIN_BASENAME ) );
+		self::assertInstanceOf( \WP_Error::class, $expired );
+		self::assertSame( 'github_updater_operation_fence_lost', $expired->get_error_code() );
+		self::assertFileDoesNotExist( $path );
+	}
+
+	public function testInstallFenceUsesEnvironmentOverride(): void {
+		putenv( self::INSTALL_LEASE . '=1200' );
+		$client  = new FakeReleaseArtifactClient( $this->descriptor() );
+		$updater = $this->updater( $client );
+		$update  = $updater->filterUpdate(
+			false,
+			array( 'Version' => '1.0.0' ),
+			self::PLUGIN_BASENAME,
+			array()
+		);
+		self::assertIsArray( $update );
+		$path = $updater->filterPreDownload(
+			false,
+			$update['package'],
+			null,
+			array( 'plugin' => self::PLUGIN_BASENAME )
+		);
+		self::assertIsString( $path );
+		$database = $GLOBALS['wpdb'];
+		self::assertInstanceOf( FakeWpdb::class, $database );
+		$database->now += 1210;
+
+		$expired = $updater->filterPreInstall( true, array( 'plugin' => self::PLUGIN_BASENAME ) );
+		self::assertInstanceOf( \WP_Error::class, $expired );
+		self::assertSame( 'github_updater_operation_fence_lost', $expired->get_error_code() );
+		self::assertFileDoesNotExist( $path );
+	}
+
+	public function testExpiredInstallFenceDuringDownloadFailsClosedAndCleansArchive(): void {
+		$client  = new FakeReleaseArtifactClient( $this->descriptor() );
+		$updater = $this->updater( $client );
+		$update  = $updater->filterUpdate(
+			false,
+			array( 'Version' => '1.0.0' ),
+			self::PLUGIN_BASENAME,
+			array()
+		);
+		self::assertIsArray( $update );
+		$client->afterAcquire = static function (): void {
+			$database = $GLOBALS['wpdb'];
+			self::assertInstanceOf( FakeWpdb::class, $database );
+			$database->now += 3610;
+		};
+
+		$result = $updater->filterPreDownload(
+			false,
+			$update['package'],
+			null,
+			array( 'plugin' => self::PLUGIN_BASENAME )
+		);
+		self::assertInstanceOf( \WP_Error::class, $result );
+		self::assertSame( 'github_updater_operation_fence_lost', $result->get_error_code() );
+		self::assertIsString( $client->lastAcquiredPath );
+		self::assertFileDoesNotExist( $client->lastAcquiredPath );
+	}
+
+	public function testExpiredInstallFenceDuringAssuranceFailsClosedAndCleansArchive(): void {
+		$checks    = 0;
+		$assurance = new ReleaseAssurance();
+		self::assertTrue(
+			$assurance->register(
+				static function () use ( &$checks ): null {
+					++$checks;
+					if ( 2 === $checks ) {
+						$database = $GLOBALS['wpdb'];
+						self::assertInstanceOf( FakeWpdb::class, $database );
+						$database->now += 3610;
+					}
+					return null;
+				}
+			)
+		);
+		$assurance->seal();
+		$client  = new FakeReleaseArtifactClient( $this->descriptor() );
+		$updater = $this->updater( $client, assurance: $assurance );
+		$update  = $updater->filterUpdate(
+			false,
+			array( 'Version' => '1.0.0' ),
+			self::PLUGIN_BASENAME,
+			array()
+		);
+		self::assertIsArray( $update );
+
+		$result = $updater->filterPreDownload(
+			false,
+			$update['package'],
+			null,
+			array( 'plugin' => self::PLUGIN_BASENAME )
+		);
+		self::assertInstanceOf( \WP_Error::class, $result );
+		self::assertSame( 'github_updater_operation_fence_lost', $result->get_error_code() );
+		self::assertSame( 2, $checks );
+		self::assertIsString( $client->lastAcquiredPath );
+		self::assertFileDoesNotExist( $client->lastAcquiredPath );
+	}
+
+	public function testExpiredInstallFenceFailsClosedAtSourceSelection(): void {
+		$client  = new FakeReleaseArtifactClient( $this->descriptor() );
+		$updater = $this->updater( $client );
+		$update  = $updater->filterUpdate(
+			false,
+			array( 'Version' => '1.0.0' ),
+			self::PLUGIN_BASENAME,
+			array()
+		);
+		self::assertIsArray( $update );
+		$path = $updater->filterPreDownload(
+			false,
+			$update['package'],
+			null,
+			array( 'plugin' => self::PLUGIN_BASENAME )
+		);
+		self::assertIsString( $path );
+		self::assertNull( $updater->filterPreUnzipFile( null, $path, '/stage', array(), 1024.0 ) );
+		$database = $GLOBALS['wpdb'];
+		self::assertInstanceOf( FakeWpdb::class, $database );
+		$database->now += 3610;
+
+		$result = $updater->filterSourceSelection(
+			'/stage/example-plugin/',
+			'/stage/',
+			null,
+			array( 'plugin' => self::PLUGIN_BASENAME )
+		);
+		self::assertInstanceOf( \WP_Error::class, $result );
+		self::assertSame( 'github_updater_operation_fence_lost', $result->get_error_code() );
+		self::assertFileDoesNotExist( $path );
+	}
+
 	private function updater(
 		FakeReleaseArtifactClient $client,
 		string $policy = 'site-controlled',
@@ -2207,6 +2602,39 @@ final class NativePluginUpdaterTest extends TestCase {
 		);
 		self::assertInstanceOf( NativePluginUpdater::class, $updater );
 		return $updater;
+	}
+
+	/** @return array<string, mixed> */
+	private function nativeState( NativePluginUpdater $updater ): array {
+		return ( new ReleaseOperationCoordinator() )->state(
+			$this->coordinationTarget( $updater ),
+			ReleaseOperationCoordinator::NATIVE_STATE
+		);
+	}
+
+	/** @param array<string, mixed> $state */
+	private function setNativeState( NativePluginUpdater $updater, array $state ): void {
+		$coordinator = new ReleaseOperationCoordinator();
+		$claim       = $coordinator->acquire(
+			$this->coordinationTarget( $updater ),
+			'test_state',
+			30
+		);
+		self::assertInstanceOf( ReleaseOperationClaim::class, $claim );
+		self::assertTrue(
+			$coordinator->publish( $claim, ReleaseOperationCoordinator::NATIVE_STATE, $state )
+		);
+	}
+
+	private function coordinationTarget( NativePluginUpdater $updater ): string {
+		$method = new \ReflectionMethod( NativePluginUpdater::class, 'coordinationTargetKey' );
+		return $method->invoke( $updater );
+	}
+
+	private function authorityRowCount(): int {
+		$database = $GLOBALS['wpdb'];
+		self::assertInstanceOf( FakeWpdb::class, $database );
+		return array_sum( array_map( 'count', $database->rows ) );
 	}
 
 	/**
@@ -2259,9 +2687,14 @@ final class NativePluginUpdaterTest extends TestCase {
 		bool $prerelease = false,
 		string $version = '1.2.3',
 		string $pluginRoot = 'example-plugin',
-		int $releaseId = 42
+		int $releaseId = 42,
+		?string $providerRepositoryId = null,
+		bool $immutable = true
 	): ArtifactDescriptor {
-		$repository = Repository::fromString( 'RocketsAreNostalgic/example-plugin' );
+		$repository = Repository::fromString(
+			'RocketsAreNostalgic/example-plugin',
+			$providerRepositoryId
+		);
 		self::assertInstanceOf( Repository::class, $repository );
 		$version = $prerelease && ! str_contains( $version, '-' )
 			? $version . '-beta.1'
@@ -2287,12 +2720,18 @@ final class NativePluginUpdaterTest extends TestCase {
 				18,
 				str_repeat( 'a', 64 )
 			),
-			true
+			$immutable
 		);
 	}
 
-	private function themeDescriptor( string $version = '1.2.3' ): ArtifactDescriptor {
-		$repository = Repository::fromString( 'RocketsAreNostalgic/example-theme' );
+	private function themeDescriptor(
+		string $version = '1.2.3',
+		?string $providerRepositoryId = null
+	): ArtifactDescriptor {
+		$repository = Repository::fromString(
+			'RocketsAreNostalgic/example-theme',
+			$providerRepositoryId
+		);
 		self::assertInstanceOf( Repository::class, $repository );
 		$query = new ReleaseQuery(
 			$repository,
@@ -2340,6 +2779,14 @@ final class FakeReleaseArtifactClient implements ReleaseArtifactClient {
 
 	public ?\WP_Error $acquireError = null;
 
+	/** @var null|callable(): void */
+	public $afterList = null;
+
+	/** @var null|callable(): void */
+	public $afterAcquire = null;
+
+	public ?string $lastAcquiredPath = null;
+
 	/** @var array<string, string>|null */
 	public ?array $archiveEntries = null;
 
@@ -2364,6 +2811,9 @@ final class FakeReleaseArtifactClient implements ReleaseArtifactClient {
 	public function listReleases( ReleaseQuery $query ) {
 		$this->lastListQuery = $query;
 		++$this->listCalls;
+		if ( null !== $this->afterList ) {
+			( $this->afterList )();
+		}
 		if ( null !== $this->listError ) {
 			return $this->listError;
 		}
@@ -2414,6 +2864,10 @@ final class FakeReleaseArtifactClient implements ReleaseArtifactClient {
 		$identity = VerifiedArtifact::fileIdentity( $path );
 		if ( null === $identity ) {
 			return new \WP_Error( 'identity_failed', 'File identity unavailable.' );
+		}
+		$this->lastAcquiredPath = $path;
+		if ( null !== $this->afterAcquire ) {
+			( $this->afterAcquire )();
 		}
 
 		return new VerifiedArtifact(

@@ -30,9 +30,14 @@ final class ReleaseCandidateSelector {
 		ReleaseQuery $query,
 		PackageIdentityTarget $target,
 		ReleaseAssurance $assurance,
-		?string $installedVersion = null
+		?string $installedVersion = null,
+		?callable $checkpoint = null
 	) {
 		foreach ( $releaseList->releases() as $release ) {
+			$blocked = $this->checkpoint( $checkpoint );
+			if ( $blocked instanceof \WP_Error ) {
+				return $blocked;
+			}
 			$descriptor = $this->artifacts->describeExact(
 				new ExactReleaseRequest( $query, $release->releaseId(), $release->tag() )
 			);
@@ -48,7 +53,10 @@ final class ReleaseCandidateSelector {
 				continue;
 			}
 			if ( null !== $installedVersion
-				&& version_compare( $descriptor->version(), $installedVersion, '<=' )
+				&& ReleaseVersion::RELATIONSHIP_NEWER !== ReleaseVersion::relationship(
+					$descriptor->version(),
+					$installedVersion
+				)
 			) {
 				return array(
 					'descriptor' => $descriptor,
@@ -56,7 +64,7 @@ final class ReleaseCandidateSelector {
 				);
 			}
 
-			$validation = $this->validate( $descriptor, $target, $assurance );
+			$validation = $this->validate( $descriptor, $target, $assurance, $checkpoint );
 			if ( $validation instanceof \WP_Error ) {
 				return $validation;
 			}
@@ -86,14 +94,23 @@ final class ReleaseCandidateSelector {
 	public function validate(
 		ArtifactDescriptor $descriptor,
 		PackageIdentityTarget $target,
-		ReleaseAssurance $assurance
+		ReleaseAssurance $assurance,
+		?callable $checkpoint = null
 	): CandidateValidation|\WP_Error {
+		$blocked = $this->checkpoint( $checkpoint );
+		if ( $blocked instanceof \WP_Error ) {
+			return $blocked;
+		}
 		$artifact = $this->artifacts->acquireDescribed( $descriptor );
 		if ( $artifact instanceof \WP_Error ) {
 			return $artifact;
 		}
 
 		try {
+			$blocked = $this->checkpoint( $checkpoint );
+			if ( $blocked instanceof \WP_Error ) {
+				return $blocked;
+			}
 			$validation = ( new ReleasePackageIdentityValidator() )->validate(
 				$artifact,
 				$descriptor,
@@ -114,5 +131,13 @@ final class ReleaseCandidateSelector {
 		} finally {
 			$artifact->discard();
 		}
+	}
+
+	private function checkpoint( ?callable $checkpoint ): ?\WP_Error {
+		if ( null === $checkpoint ) {
+			return null;
+		}
+		$result = $checkpoint();
+		return $result instanceof \WP_Error ? $result : null;
 	}
 }

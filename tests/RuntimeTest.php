@@ -41,7 +41,7 @@ final class RuntimeTest extends TestCase {
 		$class = 'RAN\\WPGitHubReleaseUpdater\\V1\\WordPress\\ReleaseCandidatePreflight';
 
 		self::assertTrue( class_exists( $class, false ) );
-		self::assertSame( 3, constant( $class . '::PROSPECTIVE_API_VERSION' ) );
+		self::assertSame( 4, constant( $class . '::PROSPECTIVE_API_VERSION' ) );
 		self::assertTrue( method_exists( $class, 'fromProspectiveTarget' ) );
 		$factory = new \ReflectionMethod( $class, 'fromProspectiveTarget' );
 		self::assertSame( 1, $factory->getNumberOfParameters() );

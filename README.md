@@ -71,7 +71,8 @@ The staged header check remains a defense-in-depth guard after Core extraction.
 It applies the same `2.1`/`2.1.0` comparison and reports a release-version
 mismatch without attempting to repair the package.
 
-Failures are retained only as bounded expiring site-transient state. Default
+Failures are retained only as bounded expiring state inside the target's
+database-authoritative coordination row. Default
 Plugins and Updates screen notices are capability-scoped, filterable through
 `ran_wp_github_release_updater_notice`, sanitized after filtering, and quiet
 for transient network failures. When `WP_DEBUG_LOG` is enabled, the package
@@ -96,9 +97,10 @@ composer require ran/wp-github-release-updater:^1.0@beta
 ```
 
 The package intentionally declares no production Composer autoload mapping.
-Each consuming plugin or theme owns its repository declaration, exact lock and
-production bundling of this dependency.
-Require its bootstrap explicitly from the consuming plugin's main file:
+Each consuming application owns its repository declaration, exact lock and
+production bundling of this dependency. Plugins may require the bootstrap from
+their main file. Theme targets must instead be registered by an ordinary active
+plugin or another application entrypoint that loads before `plugins_loaded`:
 
 ```php
 $createUpdater = require __DIR__
@@ -128,8 +130,11 @@ accessToken: static fn (): ?string => getenv( 'RAN_GITHUB_TOKEN' ) ?: null,
 The token is never placed in the package URL, cache, notices or diagnostics.
 
 Registration belongs directly in the plugin's main file, not in a
-`plugins_loaded` callback. `register()` is idempotent and `diagnostics()` is
-passive: it does not make a remote request.
+`plugins_loaded` callback. A theme's `functions.php` loads after
+`plugins_loaded`, so direct theme self-registration is rejected as
+`inactive / late_registration` on every request; it is not deferred to a later
+request. Inactive themes do not execute and cannot self-register. `register()`
+is idempotent and `diagnostics()` is passive: it does not make a remote request.
 
 Set `nativeDiscovery: false` when a consumer must still participate in shared
 runtime arbitration but must not create a native update target. The target
@@ -175,7 +180,7 @@ does not promise that the selected runtime will later become active.
 
 Managed consumers such as deployment controllers can use the WordPress-facing
 preflight instead of constructing artifact descriptors or parsing ZIP files.
-`check()` preserves the released bounded site-transient cache; pass `true` to
+`check()` preserves the released bounded row-backed verdict cache; pass `true` to
 force fresh discovery and archive inspection. It returns a
 `CandidateValidation` object with only safe fields: `state`, `code`,
 `release_tag`, normalized `release_version`, `package_header_version`, and
@@ -183,6 +188,56 @@ exact release/ZIP/digest identity. `cacheDuration` remains configurable from
 300 to 86,400 seconds and defaults to six hours. Remote failures return a
 credential-free `WP_Error` with the original updater error code and any bounded
 rate-limit cooldown.
+
+`CandidateValidation::relationshipTo()` is the canonical offered-versus-
+installed release relationship. It returns only `newer`, `same`, `older`, or
+`invalid`, so consumers do not need to reproduce the updater's SemVer rules.
+
+The updater retains exactly one non-autoloaded main-site option row for each
+target it has coordinated. That bounded row is intentional authority state,
+not a transient lock: its idle tombstone preserves the monotonic fencing
+generation across later checks and installations. Repeated operations reuse
+the same row, and object-cache availability or eviction never changes
+ownership. The package does not delete a row merely because one consumer is
+temporarily inactive; removing a consumer therefore leaves that single inert
+row unless site maintenance deliberately removes the consumer's data.
+
+### Lease timing
+
+Discovery and managed-preflight claims last 600 seconds by default.
+Installation claims last 3,600 seconds from the latest successful package
+checkpoint, matching WordPress Core's hour-scale automatic-updater boundary.
+Normal success or failure releases the claim immediately; the duration is the
+nominal bounded abandoned-operation recovery window, not a minimum wait. Rapid
+same-database-second checkpoints may extend the exact expiry by a few seconds
+so each compare-and-set renewal writes observably different bytes.
+
+Developers may set either a WordPress constant in `wp-config.php` or the
+same-named process environment variable:
+
+```php
+define( 'RAN_WP_GITHUB_RELEASE_UPDATER_DISCOVERY_LEASE_SECONDS', 900 );
+define( 'RAN_WP_GITHUB_RELEASE_UPDATER_INSTALL_LEASE_SECONDS', 7200 );
+```
+
+| Setting | Default | Accepted range |
+| --- | ---: | ---: |
+| `RAN_WP_GITHUB_RELEASE_UPDATER_DISCOVERY_LEASE_SECONDS` | 600 | 60–3,600 |
+| `RAN_WP_GITHUB_RELEASE_UPDATER_INSTALL_LEASE_SECONDS` | 3,600 | 600–86,400 |
+
+A defined WordPress constant takes precedence over the corresponding
+environment variable. Values must be integers or unsigned decimal strings;
+invalid or out-of-range selected values use the safe default. Configure every
+web, cron and CLI runtime consistently. The stored database expiry remains the
+sole ownership authority even when processes disagree about configuration.
+
+The package revalidates ownership at every hook WordPress exposes, including
+immediately before returning from `upgrader_source_selection`. WordPress then
+owns backup, destination removal and copying without another package hook.
+Accordingly, the final filesystem transition has WordPress Core-equivalent
+concurrency semantics rather than a claim of absolute fencing across an
+indefinitely suspended PHP worker. No file sentinel or second installer is
+introduced.
 
 ```php
 $preflight = ReleaseCandidatePreflight::fromTarget( array(
@@ -210,7 +265,7 @@ An authorised consumer can inspect a package that is not installed yet without
 receiving credentials, internal descriptors, signed URLs or temporary paths.
 
 The selected runtime advertises this strict custody contract as
-`ReleaseCandidatePreflight::PROSPECTIVE_API_VERSION === 3`.
+`ReleaseCandidatePreflight::PROSPECTIVE_API_VERSION === 4`.
 
 ```php
 $preflight = ReleaseCandidatePreflight::fromProspectiveTarget( array(
@@ -225,7 +280,15 @@ $candidates = is_wp_error( $preflight ) ? $preflight : $preflight->listCandidate
 $selected = is_wp_error( $candidates ) ? $candidates : $candidates[0];
 $inspection = is_wp_error( $selected )
 	? $selected
-	: $preflight->inspectExact( $selected->releaseId(), $selected->tag(), 'main' );
+	: $preflight->inspectExact( $selected->releaseId(), $selected->tag() );
+
+$artifact = is_wp_error( $inspection )
+	? $inspection
+	: $preflight->acquireExact(
+		$selected->releaseId(),
+		$selected->tag(),
+		$inspection->fingerprint()
+	);
 ```
 
 `listCandidates()` returns up to eight semantically ordered, channel-eligible
@@ -240,11 +303,12 @@ only need the newest candidate.
 validated headers. Post that fingerprint with the existing authorised install
 request, parse it with
 `ReleaseFingerprint::fromString()`, and pass it to `acquireExact()`. Acquisition
-reconstructs and freshly downloads the exact release, rejects any identity
-change, validates the ZIP in one bounded inventory pass, and performs the final
-default-branch reachability check against the acquired commit. The deliberate
-second download means display-time inspection is never reused as installation
-custody.
+re-describes the exact published release ID and tag, resolves its published tag
+commit, freshly downloads the release asset, rejects any release, commit, asset,
+digest, or package-identity change, and validates the ZIP in one bounded
+inventory pass. No branch value participates in published-release authority.
+The deliberate second download means display-time inspection is never reused as
+installation custody.
 
 The normal single-page, no-redirect request characterization is:
 
@@ -253,10 +317,10 @@ The normal single-page, no-redirect request characterization is:
 | Native offer discovery and ZIP validation | 5 |
 | Native fresh pre-install acquisition | 4 |
 | Prospective candidate list | 2 |
-| Prospective exact review | 5 |
-| Prospective exact acquisition | 5 |
+| Prospective exact review | 4 |
+| Prospective exact acquisition | 4 |
 
-A full prospective list, review, and acquisition is therefore 12 logical
+A full prospective list, review, and acquisition is therefore 10 logical
 requests and two ZIP downloads. Each ZIP download may add one allowlisted
 redirect. An incompatible native candidate adds four requests before the
 selector can safely try the next release. This is deliberate: headers inside
@@ -273,8 +337,10 @@ private archive is unchanged, and `ClaimedArtifact::discard()` deletes only
 that same file. `ClaimedArtifact::path()` remains available for the immediate
 WordPress Core handoff. The updater does not install or adopt the package.
 
-Themes use the same callback. Pass the absolute `style.css` path and the native
-installed stylesheet identity:
+Themes use the same callback, but an early application registrar must call it
+for every managed theme, whether active or inactive. For example, the following
+belongs in an ordinary active plugin's main file. Pass the absolute `style.css`
+path and the native installed stylesheet identity:
 
 ```php
 $updater = $createUpdater(
@@ -288,16 +354,24 @@ $updater = $createUpdater(
 $updater->register();
 ```
 
+Do not place this registration in the theme's `functions.php` or an
+`after_setup_theme` callback. Those paths are too late for the request-local
+runtime broker, and they cannot cover inactive themes.
+
 `autoUpdatePolicy` accepts `manual`, `automatic`, or `disabled`. Manual preserves
-the site's native automatic-update choice, automatic enables Core auto updates,
-and disabled records passive release status without offering an install.
+the site's native automatic-update choice only when the selected offer also
+passes the automatic profile; a mutable release remains manually installable
+but cannot be admitted by Core's automatic updater. Automatic enables Core auto
+updates only after the selected offer carries a stable provider repository ID
+and an immutable published GitHub Release; the same profile is rechecked
+against the fresh exact descriptor and ZIP before installation. Disabled
+records passive release status without offering an install.
 The legacy `site-controlled`, `forced-on`, and `forced-off` values remain
 accepted for existing plugin integrations.
 
 Native discovery scans at most two 20-release pages and describes at most eight
 compatible candidates. Release-list responses are capped at 256 KiB per page
-and 512 KiB in total; branch comparison requests one item and accepts at most
-64 KiB. Every request has a ten-second timeout and follows at most one validated
+and 512 KiB in total. Every request has a ten-second timeout and follows at most one validated
 redirect. Authentication, transport and rate-limit failures retain their exact
 diagnostic classification and cooldown. A failed or exhausted discovery keeps
 the last verified cache record but returns the incoming WordPress host-filter

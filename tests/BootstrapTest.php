@@ -407,12 +407,12 @@ final class BootstrapTest extends TestCase {
 	}
 
 	/**
-	 * A bootstrap first loaded after plugins_loaded defers until next request.
+	 * A bootstrap first loaded after plugins_loaded is rejected for this request.
 	 *
 	 * @runInSeparateProcess
 	 * @preserveGlobalState disabled
 	 */
-	public function testLateBootstrapDoesNotLoadRuntimeOrFailRegistration(): void {
+	public function testLateBootstrapRejectsTargetWithoutLoadingRuntime(): void {
 		WordPressState::doAction( 'plugins_loaded' );
 		$factory = require dirname( __DIR__ ) . '/bootstrap.php';
 		$facade  = $factory(
@@ -428,6 +428,12 @@ final class BootstrapTest extends TestCase {
 		self::assertSame( 'inactive', $diagnostics['state'] );
 		self::assertSame( 'late_registration', $diagnostics['code'] );
 		self::assertTrue( $diagnostics['selection_fixed'] );
+		self::assertFalse(
+			ran_wp_github_release_updater_v1_has_registered_target(
+				'plugin',
+				'example/example.php'
+			)
+		);
 		self::assertArrayNotHasKey(
 			'ran_wp_github_release_updater_broker_runtime_targets',
 			$GLOBALS

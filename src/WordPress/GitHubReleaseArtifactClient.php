@@ -14,7 +14,7 @@ use RAN\WPGitHubReleaseUpdater\V1\Artifact\ReleaseQuery;
  *
  * @internal
  */
-final class GitHubReleaseArtifactClient implements ProspectiveReleaseArtifactClient {
+final class GitHubReleaseArtifactClient implements ReleaseArtifactClient {
 
 	public function __construct( private GitHubReleaseArtifactService $service ) {
 	}
@@ -29,13 +29,5 @@ final class GitHubReleaseArtifactClient implements ProspectiveReleaseArtifactCli
 
 	public function acquireDescribed( ArtifactDescriptor $descriptor ) {
 		return $this->service->acquireDescribed( $descriptor );
-	}
-
-	public function isCommitReachableFromBranch(
-		ReleaseQuery $query,
-		string $commit,
-		string $branch
-	) {
-		return $this->service->isCommitReachableFromBranch( $query, $commit, $branch );
 	}
 }

@@ -18,14 +18,16 @@ use RAN\WPGitHubReleaseUpdater\V1\Artifact\VerifiedArtifact;
 use RAN\WPGitHubReleaseUpdater\V1\Http\WordPressTemporaryFileFactory;
 use RAN\WPGitHubReleaseUpdater\V1\WordPress\CandidateValidation;
 use RAN\WPGitHubReleaseUpdater\V1\WordPress\ProspectiveReleaseCandidate;
-use RAN\WPGitHubReleaseUpdater\V1\WordPress\ProspectiveReleaseArtifactClient;
 use RAN\WPGitHubReleaseUpdater\V1\WordPress\ReleaseArtifactClient;
 use RAN\WPGitHubReleaseUpdater\V1\WordPress\ReleaseAssurance;
 use RAN\WPGitHubReleaseUpdater\V1\WordPress\ReleaseCandidatePreflight;
 use RAN\WPGitHubReleaseUpdater\V1\WordPress\ReleaseDiscovery;
 use RAN\WPGitHubReleaseUpdater\V1\WordPress\ReleaseFingerprint;
 use RAN\WPGitHubReleaseUpdater\V1\WordPress\ReleaseInspection;
+use RAN\WPGitHubReleaseUpdater\V1\WordPress\ReleaseOperationClaim;
+use RAN\WPGitHubReleaseUpdater\V1\WordPress\ReleaseOperationCoordinator;
 use RAN\WPGitHubReleaseUpdater\V1\WordPress\ValidatedReleaseArtifact;
+use Tests\Support\FakeWpdb;
 use Tests\Support\WordPressState;
 
 spl_autoload_register(
@@ -179,10 +181,15 @@ final class ReleaseCandidatePreflightTest extends TestCase {
 
 		$client->listError = null;
 		$client->rateLimit = new RateLimit( RateLimit::LIMITED, 0, null, 321 );
-		$limited           = $this->preflight( $client )->check();
+		$preflight         = $this->preflight( $client );
+		$limited           = $preflight->check( true );
 		self::assertInstanceOf( \WP_Error::class, $limited );
 		self::assertSame( 'github_updater_rate_limited', $limited->get_error_code() );
 		self::assertSame( array( 'cooldown' => 321 ), $limited->get_error_data() );
+		$cached = $preflight->check();
+		self::assertInstanceOf( \WP_Error::class, $cached );
+		self::assertSame( 'github_updater_rate_limited', $cached->get_error_code() );
+		self::assertSame( 2, $client->listCalls );
 	}
 
 	public function testValidReleaseUsesCacheUnlessForceRequestsFreshValidation(): void {
@@ -202,7 +209,76 @@ final class ReleaseCandidatePreflightTest extends TestCase {
 		self::assertSame( 2, $client->listCalls );
 		self::assertSame( array( 42, 42 ), $client->describedReleaseIds );
 		self::assertSame( 2, $client->acquireCalls );
-		self::assertCount( 1, WordPressState::$siteTransients );
+		self::assertInstanceOf( FakeWpdb::class, $GLOBALS['wpdb'] );
+		self::assertCount( 1, $GLOBALS['wpdb']->rows['wp_options'] );
+	}
+
+	public function testColdFollowerReceivesRetryableCheckInProgressError(): void {
+		$client    = $this->clientWithOlderValidRelease();
+		$preflight = $this->preflight( $client );
+		$method    = new \ReflectionMethod( ReleaseCandidatePreflight::class, 'coordinationTargetKey' );
+		$target    = $method->invoke( $preflight );
+		self::assertIsString( $target );
+		$coordinator = new ReleaseOperationCoordinator();
+		$claim       = $coordinator->acquire( $target, 'native_discovery:test', 30 );
+		self::assertInstanceOf( ReleaseOperationClaim::class, $claim );
+
+		$result = $preflight->check();
+		self::assertInstanceOf( \WP_Error::class, $result );
+		self::assertSame( 'github_updater_check_in_progress', $result->get_error_code() );
+		self::assertSame( array( 'retryable' => true ), $result->get_error_data() );
+		self::assertSame( 0, $client->listCalls );
+		self::assertTrue( $coordinator->release( $claim ) );
+	}
+
+	public function testManagedCacheIdentityChangesWithWordPressRuntime(): void {
+		$client    = $this->clientWithOlderValidRelease();
+		$method    = new \ReflectionMethod( ReleaseCandidatePreflight::class, 'cacheKey' );
+		$preflight = $this->preflight( $client );
+		$firstKey  = $method->invoke( $preflight );
+
+		$GLOBALS['wp_version'] = '6.6';
+		$secondKey             = $method->invoke( $this->preflight( $client ) );
+
+		self::assertNotSame(
+			$firstKey,
+			$secondKey,
+			'A managed compatibility verdict must not survive a WordPress runtime change.'
+		);
+	}
+
+	public function testManagedCacheDoesNotBypassANewAssuranceProfile(): void {
+		ReleaseAssurance::selectForRequest();
+		$client = $this->clientWithOlderValidRelease();
+		$first  = $this->preflight( $client )->check();
+		self::assertInstanceOf( CandidateValidation::class, $first );
+
+		$checks                     = 0;
+		WordPressState::$actions    = array();
+		WordPressState::$didActions = array();
+		add_action(
+			ReleaseAssurance::REGISTRATION_ACTION,
+			static function ( ReleaseAssurance $assurance ) use ( &$checks ): void {
+				self::assertTrue(
+					$assurance->register(
+						static function () use ( &$checks ): \WP_Error {
+							++$checks;
+							return new \WP_Error( 'fixture_tightened_assurance', 'Rejected.' );
+						}
+					)
+				);
+			}
+		);
+		ReleaseAssurance::selectForRequest();
+
+		$result = $this->preflight( $client )->check();
+
+		self::assertSame( 1, $checks, 'The newly selected assurance profile must run on cached readiness.' );
+		self::assertInstanceOf( \WP_Error::class, $result );
+		self::assertSame( 'fixture_tightened_assurance', $result->get_error_code() );
+
+		WordPressState::reset();
+		ReleaseAssurance::selectForRequest();
 	}
 
 	public function testDiscoverReturnsNewestReleaseWithoutDescribingOrAcquiringZip(): void {
@@ -218,7 +294,6 @@ final class ReleaseCandidatePreflightTest extends TestCase {
 		self::assertSame( 1, $client->listCalls );
 		self::assertSame( array(), $client->describedReleaseIds );
 		self::assertSame( 0, $client->acquireCalls );
-		self::assertSame( array(), $client->reachabilityCalls );
 	}
 
 	public function testListCandidatesReturnsEightBoundedDisplaySafeSummariesWithoutInspection(): void {
@@ -252,14 +327,18 @@ final class ReleaseCandidatePreflightTest extends TestCase {
 		self::assertSame( 1, $client->listCalls );
 		self::assertSame( array(), $client->describedReleaseIds );
 		self::assertSame( 0, $client->acquireCalls );
-		self::assertSame( array(), $client->reachabilityCalls );
 	}
 
 	public function testInspectExactReturnsZipIdentityAndDiscardsReviewedArtifact(): void {
 		$client = $this->clientWithOlderValidRelease();
 
-		$result = $this->prospectivePreflight( $client )->inspectExact( 42, 'v1.2.3', 'main' );
+		$result = $this->prospectivePreflight( $client )->inspectExact( 42, 'v1.2.3' );
 
+		self::assertNotInstanceOf(
+			\WP_Error::class,
+			$result,
+			$result instanceof \WP_Error ? $result->get_error_code() : ''
+		);
 		self::assertInstanceOf( ReleaseInspection::class, $result );
 		self::assertSame( 42, $result->releaseId() );
 		self::assertSame( 'v1.2.3', $result->tag() );
@@ -274,22 +353,12 @@ final class ReleaseCandidatePreflightTest extends TestCase {
 		self::assertSame( 1, $client->acquireCalls );
 		self::assertCount( 1, $client->artifactPaths );
 		self::assertFileDoesNotExist( $client->artifactPaths[0] );
-		self::assertSame(
-			array(
-				array(
-					'commit'      => str_repeat( '1', 40 ),
-					'branch'      => 'main',
-					'prospective' => true,
-				),
-			),
-			$client->reachabilityCalls
-		);
 	}
 
 	public function testInspectExactDiscoversThemeStyleSheetIdentity(): void {
 		$client = $this->clientWithOlderValidRelease();
 
-		$result = $this->prospectivePreflight( $client, 'theme' )->inspectExact( 42, 'v1.2.3', 'main' );
+		$result = $this->prospectivePreflight( $client, 'theme' )->inspectExact( 42, 'v1.2.3' );
 
 		self::assertInstanceOf( ReleaseInspection::class, $result );
 		self::assertSame( 'theme', $result->packageType() );
@@ -303,7 +372,7 @@ final class ReleaseCandidatePreflightTest extends TestCase {
 		$client                         = $this->clientWithOlderValidRelease();
 		$client->incompatibleReleaseIds = array( 42 );
 
-		$result = $this->prospectivePreflight( $client )->inspectExact( 42, 'v1.2.3', 'main' );
+		$result = $this->prospectivePreflight( $client )->inspectExact( 42, 'v1.2.3' );
 
 		self::assertInstanceOf( \WP_Error::class, $result );
 		self::assertSame( CandidateValidation::RELEASE_INCOMPATIBLE, $result->get_error_code() );
@@ -311,36 +380,21 @@ final class ReleaseCandidatePreflightTest extends TestCase {
 		self::assertFileDoesNotExist( $client->artifactPaths[0] );
 	}
 
-	public function testInspectExactRejectsReleaseOutsideDefaultBranchBeforeAcquiringZip(): void {
-		$client                      = $this->clientWithOlderValidRelease();
-		$client->reachabilityResults = array( false );
-
-		$result = $this->prospectivePreflight( $client )->inspectExact( 42, 'v1.2.3', 'main' );
-
-		self::assertInstanceOf( \WP_Error::class, $result );
-		self::assertSame( 'github_updater_release_not_on_default_branch', $result->get_error_code() );
-		self::assertSame( array( 42 ), $client->describedReleaseIds );
-		self::assertSame( 0, $client->acquireCalls );
-		self::assertCount( 1, $client->reachabilityCalls );
-	}
-
 	public function testAcquireExactBindsInspectionAndTransfersValidatedZipOnce(): void {
 		$client     = $this->clientWithOlderValidRelease();
 		$preflight  = $this->prospectivePreflight( $client );
-		$inspection = $preflight->inspectExact( 42, 'v1.2.3', 'main' );
+		$inspection = $preflight->inspectExact( 42, 'v1.2.3' );
 		self::assertInstanceOf( ReleaseInspection::class, $inspection );
 
 		$result = $preflight->acquireExact(
 			42,
 			'v1.2.3',
-			'main',
 			$inspection->fingerprint()
 		);
 
 		self::assertInstanceOf( ValidatedReleaseArtifact::class, $result );
 		self::assertSame( array( 42, 42 ), $client->describedReleaseIds );
 		self::assertSame( 2, $client->acquireCalls );
-		self::assertCount( 2, $client->reachabilityCalls );
 		self::assertCount( 2, $client->artifactPaths );
 		self::assertFileDoesNotExist( $client->artifactPaths[0] );
 		self::assertFileExists( $client->artifactPaths[1] );
@@ -353,36 +407,18 @@ final class ReleaseCandidatePreflightTest extends TestCase {
 		unlink( $claimed->path() );
 	}
 
-	public function testAcquireExactDiscardsZipWhenFinalReachabilityCheckFails(): void {
-		$client                      = $this->clientWithOlderValidRelease();
-		$client->reachabilityResults = array( true, false );
-		$preflight                   = $this->prospectivePreflight( $client );
-		$inspection                  = $preflight->inspectExact( 42, 'v1.2.3', 'main' );
-		self::assertInstanceOf( ReleaseInspection::class, $inspection );
-
-		$result = $preflight->acquireExact( 42, 'v1.2.3', 'main', $inspection->fingerprint() );
-
-		self::assertInstanceOf( \WP_Error::class, $result );
-		self::assertSame( 'github_updater_release_not_on_default_branch', $result->get_error_code() );
-		self::assertSame( 2, $client->acquireCalls );
-		self::assertCount( 2, $client->reachabilityCalls );
-		self::assertNotNull( $client->lastArtifactPath );
-		self::assertFileDoesNotExist( $client->lastArtifactPath );
-	}
-
 	public function testAcquireExactRejectsChangedFingerprintAfterFreshZipValidation(): void {
 		$client     = $this->clientWithOlderValidRelease();
 		$preflight  = $this->prospectivePreflight( $client );
-		$inspection = $preflight->inspectExact( 42, 'v1.2.3', 'main' );
+		$inspection = $preflight->inspectExact( 42, 'v1.2.3' );
 		self::assertInstanceOf( ReleaseInspection::class, $inspection );
 		$client->descriptions[42] = $this->descriptor( commit: str_repeat( '2', 40 ) );
 
-		$result = $preflight->acquireExact( 42, 'v1.2.3', 'main', $inspection->fingerprint() );
+		$result = $preflight->acquireExact( 42, 'v1.2.3', $inspection->fingerprint() );
 
 		self::assertInstanceOf( \WP_Error::class, $result );
 		self::assertSame( 'github_updater_artifact_continuity_failed', $result->get_error_code() );
 		self::assertSame( 2, $client->acquireCalls );
-		self::assertCount( 1, $client->reachabilityCalls );
 	}
 
 	public function testAcquireExactRerunsAssuranceAgainstTheFreshInstallationZip(): void {
@@ -406,14 +442,13 @@ final class ReleaseCandidatePreflightTest extends TestCase {
 
 		$client     = $this->clientWithOlderValidRelease();
 		$preflight  = $this->prospectivePreflight( $client );
-		$inspection = $preflight->inspectExact( 42, 'v1.2.3', 'main' );
+		$inspection = $preflight->inspectExact( 42, 'v1.2.3' );
 		self::assertInstanceOf( ReleaseInspection::class, $inspection );
 		self::assertSame( 1, $checks );
 
 		$result = $preflight->acquireExact(
 			42,
 			'v1.2.3',
-			'main',
 			$inspection->fingerprint()
 		);
 
@@ -430,9 +465,9 @@ final class ReleaseCandidatePreflightTest extends TestCase {
 	public function testValidatedArtifactDiscardIsIdempotent(): void {
 		$client     = $this->clientWithOlderValidRelease();
 		$preflight  = $this->prospectivePreflight( $client );
-		$inspection = $preflight->inspectExact( 42, 'v1.2.3', 'main' );
+		$inspection = $preflight->inspectExact( 42, 'v1.2.3' );
 		self::assertInstanceOf( ReleaseInspection::class, $inspection );
-		$result = $preflight->acquireExact( 42, 'v1.2.3', 'main', $inspection->fingerprint() );
+		$result = $preflight->acquireExact( 42, 'v1.2.3', $inspection->fingerprint() );
 		self::assertInstanceOf( ValidatedReleaseArtifact::class, $result );
 
 		self::assertTrue( $result->discard() );
@@ -441,21 +476,6 @@ final class ReleaseCandidatePreflightTest extends TestCase {
 		self::assertNotNull( $client->lastArtifactPath );
 		self::assertFileDoesNotExist( $client->lastArtifactPath );
 		self::assertInstanceOf( \WP_Error::class, $result->handoffToCore() );
-	}
-
-	public function testUnexpectedPostDownloadFailureDiscardsArtifact(): void {
-		$client     = $this->clientWithOlderValidRelease();
-		$preflight  = $this->prospectivePreflight( $client );
-		$inspection = $preflight->inspectExact( 42, 'v1.2.3', 'main' );
-		self::assertInstanceOf( ReleaseInspection::class, $inspection );
-		$client->throwOnReachability = true;
-
-		$result = $preflight->acquireExact( 42, 'v1.2.3', 'main', $inspection->fingerprint() );
-
-		self::assertInstanceOf( \WP_Error::class, $result );
-		self::assertSame( 'github_updater_release_artifact_unavailable', $result->get_error_code() );
-		self::assertNotNull( $client->lastArtifactPath );
-		self::assertFileDoesNotExist( $client->lastArtifactPath );
 	}
 
 	private function preflight( PreflightReleaseArtifactClient $client ): ReleaseCandidatePreflight {
@@ -556,7 +576,7 @@ final class ReleaseCandidatePreflightTest extends TestCase {
 	}
 }
 
-final class PreflightReleaseArtifactClient implements ProspectiveReleaseArtifactClient {
+final class PreflightReleaseArtifactClient implements ReleaseArtifactClient {
 
 	public int $listCalls = 0;
 
@@ -580,14 +600,6 @@ final class PreflightReleaseArtifactClient implements ProspectiveReleaseArtifact
 	public array $incompatibleReleaseIds = array();
 
 	public string $packageType = 'plugin';
-
-	/** @var list<array{commit: string, branch: string, prospective: bool}> */
-	public array $reachabilityCalls = array();
-
-	/** @var list<bool|\WP_Error> */
-	public array $reachabilityResults = array();
-
-	public bool $throwOnReachability = false;
 
 	public bool $searchExhausted = false;
 
@@ -665,22 +677,5 @@ final class PreflightReleaseArtifactClient implements ProspectiveReleaseArtifact
 			$temporaryFiles,
 			$identity
 		);
-	}
-
-	public function isCommitReachableFromBranch(
-		ReleaseQuery $query,
-		string $commit,
-		string $branch
-	) {
-		if ( $this->throwOnReachability ) {
-			throw new \RuntimeException( 'Unexpected reachability failure.' );
-		}
-		$this->reachabilityCalls[] = array(
-			'commit'      => $commit,
-			'branch'      => $branch,
-			'prospective' => $query->isProspective(),
-		);
-
-		return array_shift( $this->reachabilityResults ) ?? true;
 	}
 }

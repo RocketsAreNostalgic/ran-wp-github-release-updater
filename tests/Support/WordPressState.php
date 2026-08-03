@@ -43,6 +43,10 @@ final class WordPressState {
 
 	public static bool $multisite = false;
 
+	public static int $currentNetworkId = 1;
+
+	public static int $mainSiteId = 1;
+
 	public static string $screenBase = 'plugins';
 
 	public static function reset(): void {
@@ -58,7 +62,10 @@ final class WordPressState {
 		self::$deletedFiles             = array();
 		self::$currentUserCan           = true;
 		self::$multisite                = false;
+		self::$currentNetworkId         = 1;
+		self::$mainSiteId               = 1;
 		self::$screenBase               = 'plugins';
+		$GLOBALS['wpdb']                = new FakeWpdb();
 		unset( $GLOBALS['wp_filesystem'] );
 		$_GET = array();
 	}

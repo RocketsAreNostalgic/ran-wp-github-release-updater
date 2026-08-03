@@ -22,6 +22,8 @@ final class CandidateValidation {
 
 	public const ARCHIVE_UNREADABLE = 'package_archive_unreadable';
 
+	public const ZIP_EXTENSION_UNAVAILABLE = 'package_zip_extension_unavailable';
+
 	public const ARCHIVE_SIZE_INVALID = 'package_archive_size_invalid';
 
 	public const ARCHIVE_TOO_LARGE = 'package_archive_too_large';
@@ -87,6 +89,13 @@ final class CandidateValidation {
 
 	public function packageHeaderVersion(): ?string {
 		return $this->packageHeaderVersion;
+	}
+
+	/**
+	 * Compare this canonical release version with an installed package header.
+	 */
+	public function relationshipTo( string $installedVersion ): string {
+		return ReleaseVersion::relationship( $this->releaseVersion, $installedVersion );
 	}
 
 	public function requiresPhp(): ?string {

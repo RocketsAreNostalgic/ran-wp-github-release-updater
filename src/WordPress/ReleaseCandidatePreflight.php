@@ -17,7 +17,7 @@ use RAN\WPGitHubReleaseUpdater\V1\Http\WordPressSafeHttpTransport;
  * WordPress-facing release identity preflight for managed consumers.
  */
 final class ReleaseCandidatePreflight {
-	public const PROSPECTIVE_API_VERSION = 3;
+	public const PROSPECTIVE_API_VERSION = 4;
 
 	/**
 	 * Request-local capability for a Core-owned exact-release handoff.
@@ -29,9 +29,13 @@ final class ReleaseCandidatePreflight {
 	 */
 	public const CORE_REINSTALL_HANDOFF_FILTER = 'ran_wp_github_release_updater_v1_core_reinstall_handoff';
 
-	private const CACHE_SCHEMA = 3;
+	private const CACHE_SCHEMA = 4;
+
+	private const FAILURE_COOLDOWN = 60;
 
 	private ReleaseCandidateSelector $candidates;
+
+	private ReleaseOperationCoordinator $operations;
 
 	/** @var callable(): int */
 	private $clock;
@@ -50,6 +54,7 @@ final class ReleaseCandidatePreflight {
 		?callable $clock = null
 	) {
 		$this->candidates = new ReleaseCandidateSelector( $artifacts );
+		$this->operations = new ReleaseOperationCoordinator();
 		$this->clock      = $clock ?? static fn (): int => time();
 	}
 
@@ -133,7 +138,7 @@ final class ReleaseCandidatePreflight {
 	 */
 	private static function fromProspectiveTargetWithClient(
 		array $target,
-		ProspectiveReleaseArtifactClient $artifacts
+		ReleaseArtifactClient $artifacts
 	) {
 		$repositoryName = $target['repository'] ?? null;
 		$repositoryId   = $target['providerRepositoryId'] ?? null;
@@ -237,11 +242,7 @@ final class ReleaseCandidatePreflight {
 	 *
 	 * @return ReleaseInspection|\WP_Error
 	 */
-	public function inspectExact(
-		int $releaseId,
-		string $tag,
-		string $defaultBranch
-	) {
+	public function inspectExact( int $releaseId, string $tag ) {
 		$client = $this->prospectiveClient();
 		if ( $client instanceof \WP_Error ) {
 			return $client;
@@ -253,17 +254,6 @@ final class ReleaseCandidatePreflight {
 		);
 		if ( $descriptor instanceof \WP_Error ) {
 			return $descriptor;
-		}
-		$reachable = $client->isCommitReachableFromBranch(
-			$query,
-			$descriptor->commit(),
-			$defaultBranch
-		);
-		if ( $reachable instanceof \WP_Error ) {
-			return $reachable;
-		}
-		if ( ! $reachable ) {
-			return self::unreachable();
 		}
 		$artifact = $client->acquireDescribed( $descriptor );
 		if ( $artifact instanceof \WP_Error ) {
@@ -319,7 +309,6 @@ final class ReleaseCandidatePreflight {
 	public function acquireExact(
 		int $releaseId,
 		string $tag,
-		string $defaultBranch,
 		ReleaseFingerprint $expectedFingerprint
 	) {
 		$client = $this->prospectiveClient();
@@ -375,16 +364,6 @@ final class ReleaseCandidatePreflight {
 				return $rejection;
 			}
 
-			$reachable = $client->isCommitReachableFromBranch(
-				$query,
-				$descriptor->commit(),
-				$defaultBranch
-			);
-			if ( true !== $reachable ) {
-				$artifact->discard();
-				return $reachable instanceof \WP_Error ? $reachable : self::unreachable();
-			}
-
 			return new ValidatedReleaseArtifact(
 				$artifact,
 				ReleaseInspection::fromDescriptor(
@@ -413,8 +392,19 @@ final class ReleaseCandidatePreflight {
 			return self::prospectiveUnavailable();
 		}
 
-		$cached = get_site_transient( $this->cacheKey() );
-		if ( ! $force && is_array( $cached ) && self::CACHE_SCHEMA === ( $cached['schema'] ?? null )
+		$cacheRevision = $this->assurance->cacheRevision();
+		$cached        = null === $cacheRevision
+			? array()
+			: $this->operations->state(
+				$this->coordinationTargetKey(),
+				ReleaseOperationCoordinator::MANAGED_STATE
+			);
+		if ( ! is_string( $cached['_cache_key'] ?? null )
+			|| ! hash_equals( $this->cacheKey(), $cached['_cache_key'] )
+		) {
+			$cached = array();
+		}
+		if ( ! $force && null !== $cacheRevision && is_array( $cached ) && self::CACHE_SCHEMA === ( $cached['schema'] ?? null )
 			&& is_int( $cached['checked_at'] ?? null ) && $this->now() - $cached['checked_at'] < $this->cacheDuration
 		) {
 			$result = CandidateValidation::fromArray( $cached['validation'] ?? array() );
@@ -422,50 +412,129 @@ final class ReleaseCandidatePreflight {
 				return $result;
 			}
 		}
-
-		$query = $this->query();
-		$list  = $this->artifacts->listReleases( $query );
-		if ( $list instanceof \WP_Error ) {
-			return $list;
-		}
-		if ( $list->rateLimit()->isLimited() ) {
-			return self::rateLimitError( $list );
-		}
-
-		$target = $this->target();
-		if ( $target instanceof \WP_Error ) {
-			return $target;
-		}
-		$selected = $this->candidates->select(
-			$list,
-			$query,
-			$target,
-			$this->assurance
-		);
-		if ( $selected instanceof \WP_Error ) {
-			return $selected;
-		}
-		if ( null === $selected ) {
+		if ( ! $force
+			&& is_int( $cached['cooldown_until'] ?? null )
+			&& $cached['cooldown_until'] > $this->now()
+		) {
+			$code = is_string( $cached['error_code'] ?? null )
+				? $cached['error_code']
+				: 'github_updater_release_check_failed';
 			return new \WP_Error(
-				'github_updater_no_eligible_release',
-				'No eligible published release is available for validation.'
+				$code,
+				'The release check is in a bounded failure cooldown.',
+				array(
+					'retryable'      => true,
+					'cooldown_until' => $cached['cooldown_until'],
+				)
 			);
 		}
-		$result = $selected['validation'];
-		if ( null === $result ) {
-			throw new \LogicException( 'A managed preflight selection must inspect its release ZIP.' );
-		}
-		set_site_transient(
-			$this->cacheKey(),
-			array(
-				'schema'     => self::CACHE_SCHEMA,
-				'checked_at' => $this->now(),
-				'validation' => $result->toArray(),
-			),
-			$this->cacheDuration
-		);
 
-		return $result;
+		$claim = $this->operations->acquire(
+			$this->coordinationTargetKey(),
+			'managed_preflight:' . $this->cacheKey(),
+			$this->operations->discoveryLeaseSeconds()
+		);
+		if ( $claim instanceof \WP_Error ) {
+			if ( 'github_updater_operation_busy' === $claim->get_error_code() ) {
+				return new \WP_Error(
+					'github_updater_check_in_progress',
+					'Another release check is already in progress for this target.',
+					array( 'retryable' => true )
+				);
+			}
+			return $claim;
+		}
+
+		try {
+			$query = $this->query();
+			$list  = $this->artifacts->listReleases( $query );
+			if ( $list instanceof \WP_Error ) {
+				$this->publishManagedFailure( $claim, $cached, $list->get_error_code(), self::FAILURE_COOLDOWN );
+				return $list;
+			}
+			$renewed = $this->operations->renew(
+				$claim,
+				$this->operations->discoveryLeaseSeconds()
+			);
+			if ( $renewed instanceof \WP_Error ) {
+				return $renewed;
+			}
+			$claim = $renewed;
+			if ( $list->rateLimit()->isLimited() ) {
+				$this->publishManagedFailure(
+					$claim,
+					$cached,
+					'github_updater_rate_limited',
+					$list->rateLimit()->cooldownSeconds() ?? self::FAILURE_COOLDOWN
+				);
+				return self::rateLimitError( $list );
+			}
+
+			$target = $this->target();
+			if ( $target instanceof \WP_Error ) {
+				return $target;
+			}
+			$checkpoint = function () use ( &$claim ): ?\WP_Error {
+				$renewed = $this->operations->renew(
+					$claim,
+					$this->operations->discoveryLeaseSeconds()
+				);
+				if ( $renewed instanceof \WP_Error ) {
+					return $renewed;
+				}
+				$claim = $renewed;
+				return null;
+			};
+			$selected   = $this->candidates->select(
+				$list,
+				$query,
+				$target,
+				$this->assurance,
+				null,
+				$checkpoint
+			);
+			if ( $selected instanceof \WP_Error ) {
+				$this->publishManagedFailure(
+					$claim,
+					$cached,
+					$selected->get_error_code(),
+					self::FAILURE_COOLDOWN
+				);
+				return $selected;
+			}
+			if ( null === $selected ) {
+				return new \WP_Error(
+					'github_updater_no_eligible_release',
+					'No eligible published release is available for validation.'
+				);
+			}
+			$result = $selected['validation'];
+			if ( null === $result ) {
+				throw new \LogicException( 'A managed preflight selection must inspect its release ZIP.' );
+			}
+			if ( null !== $cacheRevision ) {
+				$published = $this->operations->publish(
+					$claim,
+					ReleaseOperationCoordinator::MANAGED_STATE,
+					array(
+						'schema'     => self::CACHE_SCHEMA,
+						'_cache_key' => $this->cacheKey(),
+						'checked_at' => $this->now(),
+						'validation' => $result->toArray(),
+					)
+				);
+				if ( $published instanceof \WP_Error ) {
+					return $published;
+				}
+				$claim = null;
+			}
+
+			return $result;
+		} finally {
+			if ( $claim instanceof ReleaseOperationClaim ) {
+				$this->operations->release( $claim );
+			}
+		}
 	}
 
 	private static function defaultArtifacts(): GitHubReleaseArtifactClient {
@@ -531,15 +600,20 @@ final class ReleaseCandidatePreflight {
 	}
 
 	/**
-	 * @return ProspectiveReleaseArtifactClient|\WP_Error
+	 * @return ReleaseArtifactClient|\WP_Error
 	 */
 	private function prospectiveClient() {
-		return $this->prospective && $this->artifacts instanceof ProspectiveReleaseArtifactClient
+		return $this->prospective
 			? $this->artifacts
 			: self::prospectiveUnavailable();
 	}
 
 	private function cacheKey(): string {
+		$wpVersion         = is_string( $GLOBALS['wp_version'] ?? null )
+			? $GLOBALS['wp_version']
+			: '6.5';
+		$assuranceRevision = $this->assurance->cacheRevision() ?? 'uncacheable';
+
 		return 'ran_wp_gh_preflight_v1_' . substr(
 			hash(
 				'sha256',
@@ -553,12 +627,45 @@ final class ReleaseCandidatePreflight {
 						$this->channel,
 						$this->packageType,
 						$this->accessToken->isConfigured() ? 'private' : 'public',
+						(string) self::CACHE_SCHEMA,
+						PHP_VERSION,
+						$wpVersion,
+						$assuranceRevision,
 					)
 				)
 			),
 			0,
 			32
 		);
+	}
+
+	private function coordinationTargetKey(): string {
+		return implode( "\0", array( $this->packageType, $this->packageRoot, $this->headerFile ) );
+	}
+
+	/** @param array<string, mixed> $cached */
+	private function publishManagedFailure(
+		?ReleaseOperationClaim &$claim,
+		array $cached,
+		string $code,
+		int $cooldown
+	): void {
+		if ( null === $claim ) {
+			return;
+		}
+		$cached['schema']         = self::CACHE_SCHEMA;
+		$cached['_cache_key']     = $this->cacheKey();
+		$cached['status']         = 'cooldown';
+		$cached['failed_at']      = $this->now();
+		$cached['cooldown_until'] = $this->now() + max( 1, min( 86400, $cooldown ) );
+		$cached['error_code']     = substr( sanitize_key( $code ), 0, 80 );
+		if ( true === $this->operations->publish(
+			$claim,
+			ReleaseOperationCoordinator::MANAGED_STATE,
+			$cached
+		) ) {
+			$claim = null;
+		}
 	}
 
 	private function now(): int {
@@ -582,7 +689,7 @@ final class ReleaseCandidatePreflight {
 
 	private static function prospectiveUnavailable(): \WP_Error {
 		return new \WP_Error(
-			'github_updater_release_reachability_unavailable',
+			'github_updater_release_preflight_unavailable',
 			'Prospective release validation is unavailable.'
 		);
 	}
@@ -598,13 +705,6 @@ final class ReleaseCandidatePreflight {
 		return new \WP_Error(
 			'github_updater_no_eligible_release',
 			'No eligible published release is available.'
-		);
-	}
-
-	private static function unreachable(): \WP_Error {
-		return new \WP_Error(
-			'github_updater_release_not_on_default_branch',
-			'The release tag commit is not reachable from the repository default branch.'
 		);
 	}
 }

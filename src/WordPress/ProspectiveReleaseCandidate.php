@@ -7,8 +7,8 @@ namespace RAN\WPGitHubReleaseUpdater\V1\WordPress;
 /**
  * Bounded, display-safe summary of one published release candidate.
  *
- * Exact inspection remains responsible for validating the ZIP headers,
- * compatibility, artifact identity and default-branch reachability.
+ * Exact inspection remains responsible for validating the published release,
+ * ZIP headers, compatibility, artifact identity and digest continuity.
  */
 final readonly class ProspectiveReleaseCandidate {
 
