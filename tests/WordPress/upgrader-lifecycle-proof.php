@@ -288,6 +288,19 @@ function ran_updater_proof_finish_automatic( WP_Automatic_Updater $automatic ): 
 	do_action( 'automatic_updates_complete', $property->getValue( $automatic ) );
 }
 
+function ran_updater_proof_delete_temp_backup( string $type, string $slug ): void {
+	$deleted = ( new WP_Upgrader( new Automatic_Upgrader_Skin() ) )->delete_temp_backup(
+		array(
+			array(
+				'dir'  => 'plugin' === $type ? 'plugins' : 'themes',
+				'slug' => $slug,
+				'src'  => 'plugin' === $type ? WP_PLUGIN_DIR : get_theme_root(),
+			),
+		)
+	);
+	ran_updater_proof_assert( ! is_wp_error( $deleted ), 'A successful update temporary backup could not be removed.' );
+}
+
 $ran_proof_plugin_slug       = 'ran-updater-proof-plugin';
 $ran_proof_plugin_directory  = 'ran-updater-proof-plugin-renamed';
 $ran_proof_plugin_identifier = $ran_proof_plugin_directory . '/' . $ran_proof_plugin_slug . '.php';
@@ -404,6 +417,7 @@ ran_updater_proof_assert( true === $ran_proof_plugin_result, 'Plugin_Upgrader di
 ran_updater_proof_assert( '2.0.0' === ran_updater_proof_read_version( $ran_proof_plugin_file, 'plugin' ), 'The renamed plugin version was not updated.' );
 ran_updater_proof_assert( 'plugin-manual-renamed' === file_get_contents( dirname( $ran_proof_plugin_file ) . '/marker.txt' ), 'The renamed plugin source was not mapped authoritatively.' );
 $ran_proof_plugin_updater->finalizePendingInstall();
+ran_updater_proof_delete_temp_backup( 'plugin', $ran_proof_plugin_directory );
 
 $ran_proof_auto_plugin_client = new RanUpdaterLifecycleLocalClient();
 $ran_proof_auto_plugin_updater = NativePluginUpdater::fromTarget(
@@ -446,6 +460,7 @@ ran_updater_proof_assert( true === $ran_proof_automatic_result, 'WP_Automatic_Up
 ran_updater_proof_assert( '3.0.0' === ran_updater_proof_read_version( $ran_proof_auto_plugin_file, 'plugin' ), 'The automatic plugin update did not install the expected version.' );
 ran_updater_proof_assert( is_plugin_active( $ran_proof_auto_plugin_identifier ), 'The automatic plugin update changed activation state.' );
 $ran_proof_auto_plugin_updater->finalizePendingInstall();
+ran_updater_proof_delete_temp_backup( 'plugin', $ran_proof_auto_plugin_slug );
 
 $ran_proof_auto_plugin_updater->refreshCache();
 $ran_proof_auto_plugin_archive = ran_updater_proof_archive(
@@ -523,6 +538,7 @@ foreach ( array( $ran_proof_active_theme, $ran_proof_inactive_theme ) as $index 
 	ran_updater_proof_assert( true === $result, 'Theme_Upgrader did not complete a lifecycle proof update.' );
 	ran_updater_proof_assert( '2.0.0' === ran_updater_proof_read_version( get_theme_root() . '/' . $theme_slug . '/style.css', 'theme' ), 'A lifecycle proof theme version was not updated.' );
 	$updater->finalizePendingInstall();
+	ran_updater_proof_delete_temp_backup( 'theme', $theme_slug );
 	$ran_proof_theme_updaters[ $theme_slug ] = $updater;
 	$ran_proof_theme_clients[ $theme_slug ]  = $client;
 }
