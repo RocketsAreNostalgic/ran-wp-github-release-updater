@@ -20,7 +20,6 @@ final class GitHubReleaseArtifactService {
 	private const MAX_RELEASE_PAGES        = 2;
 	private const RELEASE_RESPONSE_LIMIT   = 262144;
 	private const RELEASE_LIST_BYTES_LIMIT = 524288;
-	private const COMPARE_RESPONSE_LIMIT   = 65536;
 	private const COMMIT_RESPONSE_LIMIT    = 16384;
 	private const PACKAGE_SIZE_LIMIT       = 52428800;
 	private const HTTP_TIMEOUT             = 10;
@@ -126,7 +125,7 @@ final class GitHubReleaseArtifactService {
 		usort(
 			$releases,
 			static fn ( ReleaseSummary $left, ReleaseSummary $right ): int =>
-				version_compare( $right->version(), $left->version() )
+				ReleaseVersion::compare( $right->version(), $left->version() ) ?? 0
 		);
 		if ( $query->isProspective() ) {
 			$repositoryIdentity = $this->assertRepositoryIdentity( $query );
@@ -241,12 +240,10 @@ final class GitHubReleaseArtifactService {
 				'The downloaded release asset did not match its expected SHA-256 digest.'
 			);
 		}
-		if ( ! $descriptor->query()->isProspective() ) {
-			$repositoryIdentity = $this->assertRepositoryIdentity( $descriptor->query() );
-			if ( $repositoryIdentity instanceof \WP_Error ) {
-				$this->discardTemporaryFile( $path );
-				return $repositoryIdentity;
-			}
+		$repositoryIdentity = $this->assertRepositoryIdentity( $descriptor->query() );
+		if ( $repositoryIdentity instanceof \WP_Error ) {
+			$this->discardTemporaryFile( $path );
+			return $repositoryIdentity;
 		}
 
 		return new VerifiedArtifact(
@@ -263,65 +260,6 @@ final class GitHubReleaseArtifactService {
 		} catch ( \Throwable ) {
 			// A cleanup adapter must not replace the original download error.
 		}
-	}
-
-	/**
-	 * Prove that an exact release commit is reachable from the repository's
-	 * provider-verified default branch.
-	 *
-	 * @return bool|\WP_Error
-	 */
-	public function isCommitReachableFromBranch(
-		ReleaseQuery $query,
-		string $commit,
-		string $branch
-	) {
-		if ( 1 !== preg_match( '/\A[a-f0-9]{40}\z/D', $commit )
-			|| '' === $branch
-			|| strlen( $branch ) > 191
-			|| 1 === preg_match( '/[\x00-\x20\x7F~^:?*\[\\\\]/', $branch )
-			|| str_contains( $branch, '..' )
-			|| str_ends_with( $branch, '.' )
-			|| str_ends_with( $branch, '/' ) ) {
-			return new \WP_Error(
-				'github_updater_invalid_release_branch',
-				'The default branch reachability request is invalid.'
-			);
-		}
-
-		$response = $this->getJson(
-			$query,
-			$this->repositoryApiUrl( $query->repository() )
-				. '/compare/'
-				. rawurlencode( $commit )
-				. '...'
-				. rawurlencode( $branch )
-				. '?per_page=1&page=1',
-			self::COMPARE_RESPONSE_LIMIT
-		);
-		if ( $response instanceof \WP_Error ) {
-			return $response;
-		}
-		$data = $this->decodeObject( $response->body() );
-		if ( $data instanceof \WP_Error ) {
-			return $data;
-		}
-
-		$status    = is_string( $data['status'] ?? null ) ? $data['status'] : '';
-		$mergeBase = is_array( $data['merge_base_commit'] ?? null )
-			&& is_string( $data['merge_base_commit']['sha'] ?? null )
-				? strtolower( $data['merge_base_commit']['sha'] )
-				: '';
-
-		$reachable = in_array( $status, array( 'ahead', 'identical' ), true )
-			&& hash_equals( $commit, $mergeBase );
-		if ( ! $reachable ) {
-			return false;
-		}
-
-		$repositoryIdentity = $this->assertRepositoryIdentity( $query );
-
-		return $repositoryIdentity instanceof \WP_Error ? $repositoryIdentity : true;
 	}
 
 	/**

@@ -24,8 +24,8 @@ jobs:
           - "8.4"
 
     steps:
-      - uses: actions/checkout@v6.0.2
-      - uses: shivammathur/setup-php@v2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: shivammathur/setup-php@44454db4f0199b8b9685a5d763dc37cbf79108e1 # 2.36.0
         with:
           php-version: ${{ matrix.php }}
           coverage: none
@@ -33,3 +33,58 @@ jobs:
       - run: composer install --no-interaction --prefer-dist
       - run: composer check
       - run: composer audit --locked
+
+  wordpress-lifecycle:
+    name: WordPress ${{ matrix.wordpress }} lifecycle / PHP 8.2
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        wordpress:
+          - "6.5"
+          - "7.0.2"
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_DATABASE: wordpress_test
+          MYSQL_ROOT_PASSWORD: root
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping --host=127.0.0.1 --user=root --password=root"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: shivammathur/setup-php@44454db4f0199b8b9685a5d763dc37cbf79108e1 # 2.36.0
+        with:
+          php-version: "8.2"
+          coverage: none
+          extensions: mysqli, zip
+          tools: wp-cli
+      - name: Install exact WordPress fixture
+        run: |
+          test "$(php -r 'echo PHP_MAJOR_VERSION . "." . PHP_MINOR_VERSION;')" = '8.2'
+          wp core download --path=build/wordpress --version=${{ matrix.wordpress }}
+          test "$(wp core version --path=build/wordpress)" = '${{ matrix.wordpress }}'
+          wp config create --path=build/wordpress --dbname=wordpress_test --dbuser=root --dbpass=root --dbhost=127.0.0.1:3306
+          wp core install --path=build/wordpress --url=http://localhost --title='RAN Updater Lifecycle CI' --admin_user=admin --admin_password=admin --admin_email=admin@example.com --skip-email
+      - name: Prove plugin and theme registration lifecycle
+        env:
+          RAN_UPDATER_LIFECYCLE_TEST_DISPOSABLE: "1"
+          RAN_UPDATER_WORDPRESS_PATH: ${{ github.workspace }}/build/wordpress
+          RAN_UPDATER_WORDPRESS_VERSION: ${{ matrix.wordpress }}
+        run: |
+          printf '%s\n' 'RAN updater disposable test site' > build/wordpress/.ran-updater-disposable-test-site
+          bash tests/WordPress/lifecycle-smoke.sh
+      - name: Prove real-MySQL cross-process coordination
+        env:
+          RAN_UPDATER_LIFECYCLE_TEST_DISPOSABLE: "1"
+          RAN_UPDATER_WORDPRESS_PATH: ${{ github.workspace }}/build/wordpress
+          RAN_UPDATER_WORDPRESS_VERSION: ${{ matrix.wordpress }}
+        run: bash tests/Coordination/mysql-two-process.sh

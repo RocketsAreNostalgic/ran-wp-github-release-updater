@@ -274,3 +274,16 @@ if ( ! function_exists( 'is_multisite' ) ) {
 		return WordPressState::$multisite;
 	}
 }
+
+if ( ! function_exists( 'get_current_network_id' ) ) {
+	function get_current_network_id(): int {
+		return WordPressState::$currentNetworkId;
+	}
+}
+
+if ( ! function_exists( 'get_main_site_id' ) ) {
+	function get_main_site_id( ?int $networkId = null ): int {
+		unset( $networkId );
+		return WordPressState::$mainSiteId;
+	}
+}

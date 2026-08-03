@@ -32,12 +32,15 @@ use RAN\WPGitHubReleaseUpdater\V1\Artifact\Repository;
  *     requires_php: ?string,
  *     details_url: string,
  *     package_url: string,
+ *     automatic_profile?: string,
  *     candidate_validation?: array{state: string, code: string, release_tag: string, release_version: string, package_header_version: ?string, identity: array{release_id: int, tag: string, zip_asset_id: int, sha256: string, package_type: string, header_file: string}}
  * }
  */
 final class NativePluginUpdater {
 
-	private const CACHE_SCHEMA = 7;
+	private const CACHE_SCHEMA = 8;
+
+	private const OPERATION_TTL = 600;
 
 	private bool $registered = false;
 
@@ -47,10 +50,16 @@ final class NativePluginUpdater {
 
 	private ?ClaimedArtifact $pendingClaim = null;
 
+	private ?ReleaseOperationClaim $pendingOperationClaim = null;
+
+	private ?ReleaseOperationClaim $activeDiscoveryClaim = null;
+
 	/** @var Offer|null */
 	private ?array $pendingOffer = null;
 
 	private ReleaseCandidateSelector $candidates;
+
+	private ReleaseOperationCoordinator $operations;
 
 	/** @var callable(): int */
 	private $clock;
@@ -82,6 +91,7 @@ final class NativePluginUpdater {
 		$this->pluginData = $pluginData;
 		$this->clock      = $clock ?? static fn (): int => time();
 		$this->candidates = new ReleaseCandidateSelector( $artifacts );
+		$this->operations = new ReleaseOperationCoordinator();
 	}
 
 	/**
@@ -253,6 +263,7 @@ final class NativePluginUpdater {
 			PHP_INT_MAX,
 			4
 		);
+		add_filter( 'upgrader_pre_install', array( $this, 'filterPreInstall' ), PHP_INT_MAX, 2 );
 		add_action( 'upgrader_process_complete', array( $this, 'observeCompletion' ), 10, 2 );
 		add_action( 'admin_notices', array( $this, 'renderAdminNotice' ) );
 		add_action( 'network_admin_notices', array( $this, 'renderAdminNotice' ) );
@@ -289,7 +300,10 @@ final class NativePluginUpdater {
 		if ( null === $offer ) {
 			return $update;
 		}
-		if ( version_compare( $offer['version'], $currentVersion, '<=' ) ) {
+		if ( ReleaseVersion::RELATIONSHIP_NEWER !== ReleaseVersion::relationship(
+			$offer['version'],
+			$currentVersion
+		) ) {
 			$this->storeCurrent( $offer );
 			return $update;
 		}
@@ -376,8 +390,10 @@ final class NativePluginUpdater {
 		if ( in_array( $this->autoUpdatePolicy, array( 'disabled', 'forced-off' ), true ) ) {
 			return false;
 		}
-		if ( 'automatic' === $this->autoUpdatePolicy ) {
-			return true;
+		if ( 'automatic' === $this->autoUpdatePolicy || true === $update ) {
+			$offer = $this->validatedOffer( $this->cachedState()['offer'] ?? null );
+			return null !== $offer
+				&& ReleaseAssurance::AUTOMATIC_PROFILE_REVISION === ( $offer['automatic_profile'] ?? null );
 		}
 
 		return $update;
@@ -403,6 +419,10 @@ final class NativePluginUpdater {
 		}
 		if ( false !== $reply ) {
 			if ( $this->admitsCoreReinstallHandoff( $reply, $package, $hookExtra ) ) {
+				$blocked = $this->startPendingInstall( $package );
+				if ( $blocked instanceof \WP_Error ) {
+					return $blocked;
+				}
 				$this->pendingArchive = $reply;
 				$this->pendingClaim   = null;
 				add_filter(
@@ -430,7 +450,24 @@ final class NativePluginUpdater {
 				'The update package does not match the exact offered GitHub Release asset.'
 			);
 		}
-
+		$blocked = $this->startPendingInstall( $package );
+		if ( $blocked instanceof \WP_Error ) {
+			return $blocked;
+		}
+		if ( null === $this->pendingOperationClaim ) {
+			return $this->downloadError(
+				'github_updater_operation_fence_lost',
+				'The updater installation fence is unavailable.'
+			);
+		}
+		$state = $this->nativeStateFromClaim( $this->pendingOperationClaim );
+		$offer = $this->validatedOffer( $state['offer'] ?? null );
+		if ( null === $offer || ! hash_equals( $offer['package_url'], $package ) ) {
+			return $this->downloadError(
+				'github_updater_release_changed',
+				'The offered release changed before the installation operation acquired ownership.'
+			);
+		}
 		$query      = $this->query();
 		$descriptor = $this->artifacts->describeExact(
 			new ExactReleaseRequest( $query, $offer['release_id'], $offer['tag'] )
@@ -443,11 +480,20 @@ final class NativePluginUpdater {
 				'The offered GitHub Release changed before download.'
 			);
 		}
+		$blocked = $this->renewPendingInstall();
+		if ( $blocked instanceof \WP_Error ) {
+			return $this->downloadError( $blocked->get_error_code(), $blocked->get_error_message() );
+		}
 
 		$verified = $this->artifacts->acquireDescribed( $descriptor );
 		if ( $verified instanceof \WP_Error ) {
 			$this->storeDiagnostic( self::errorCode( $verified ), 'failed' );
 			return $verified;
+		}
+		$blocked = $this->renewPendingInstall();
+		if ( $blocked instanceof \WP_Error ) {
+			$verified->discard();
+			return $this->downloadError( $blocked->get_error_code(), $blocked->get_error_message() );
 		}
 		$validation = $this->validatedCandidateValidation( $offer['candidate_validation'] ?? null );
 		if ( null === $validation ) {
@@ -457,15 +503,18 @@ final class NativePluginUpdater {
 				'The offered release validation is unavailable.'
 			);
 		}
-		$rejection = $this->assurance->check(
-			$descriptor,
-			$validation,
-			$verified->sha256()
-		);
+		$rejection = ReleaseAssurance::AUTOMATIC_PROFILE_REVISION === ( $offer['automatic_profile'] ?? null )
+			? $this->assurance->checkAutomatic( $descriptor, $validation, $verified->sha256() )
+			: $this->assurance->check( $descriptor, $validation, $verified->sha256() );
 		if ( $rejection instanceof \WP_Error ) {
 			$verified->discard();
 			$this->storeDiagnostic( self::errorCode( $rejection ), 'failed' );
 			return $rejection;
+		}
+		$blocked = $this->renewPendingInstall();
+		if ( $blocked instanceof \WP_Error ) {
+			$verified->discard();
+			return $this->downloadError( $blocked->get_error_code(), $blocked->get_error_message() );
 		}
 		$claimed = $verified->claim();
 		if ( $claimed instanceof \WP_Error ) {
@@ -483,7 +532,6 @@ final class NativePluginUpdater {
 			5
 		);
 
-		$this->storeDiagnostic( 'verified_download', 'ready' );
 		$this->debugLog( 'verified_download', array( 'version' => $offer['version'] ) );
 		return $this->pendingArchive;
 	}
@@ -531,7 +579,11 @@ final class NativePluginUpdater {
 		) {
 			return $pre;
 		}
-
+		$blocked = $this->renewPendingInstall();
+		if ( $blocked instanceof \WP_Error ) {
+			$this->clearPendingInstall();
+			return $blocked;
+		}
 		remove_filter(
 			'pre_unzip_file',
 			array( $this, 'filterPreUnzipFile' ),
@@ -576,6 +628,27 @@ final class NativePluginUpdater {
 	}
 
 	/**
+	 * Revalidate ownership at Core's final hook before destination mutation.
+	 *
+	 * @param array<string, mixed> $hookExtra Core upgrader context.
+	 */
+	public function filterPreInstall( mixed $response, array $hookExtra ): mixed {
+		if ( ! $this->matchesHookExtra( $hookExtra ) || null === $this->pendingArchive ) {
+			return $response;
+		}
+		if ( $response instanceof \WP_Error ) {
+			$this->clearPendingInstall();
+			return $response;
+		}
+		$blocked = $this->renewPendingInstall();
+		if ( $blocked instanceof \WP_Error ) {
+			$this->clearPendingInstall();
+			return $blocked;
+		}
+		return $response;
+	}
+
+	/**
 	 * Validate Core's staged source and preserve a renamed installed directory.
 	 *
 	 * @param array<string, mixed> $hookExtra Core upgrader context.
@@ -589,7 +662,6 @@ final class NativePluginUpdater {
 	) {
 		unset( $upgrader );
 		if ( ! $this->matchesHookExtra( $hookExtra )
-			|| null === $this->pendingOffer
 			|| null === $this->pendingArchive
 		) {
 			return $source;
@@ -598,11 +670,25 @@ final class NativePluginUpdater {
 			$this->clearPendingInstall();
 			return $source;
 		}
+		$blocked = $this->renewPendingInstall();
+		if ( $blocked instanceof \WP_Error ) {
+			$this->clearPendingInstall();
+			return $blocked;
+		}
 		if ( ! is_string( $source ) || '' === $source ) {
 			return $this->sourceError(
 				'github_updater_invalid_staged_source',
 				'WordPress did not provide a valid staged update source.'
 			);
+		}
+		if ( null === $this->pendingOffer ) {
+			$blocked = $this->renewPendingInstall();
+			if ( $blocked instanceof \WP_Error ) {
+				$this->clearPendingInstall();
+				return $blocked;
+			}
+			$this->debugLog( 'core_reinstall_source_admitted' );
+			return $source;
 		}
 
 		global $wp_filesystem;
@@ -680,7 +766,11 @@ final class NativePluginUpdater {
 		}
 
 		if ( $this->installedDirectory === $this->pluginSlug ) {
-			$this->clearPendingInstall();
+			$blocked = $this->renewPendingInstall();
+			if ( $blocked instanceof \WP_Error ) {
+				$this->clearPendingInstall();
+				return $blocked;
+			}
 			$this->debugLog( 'staged_identity_verified' );
 			return $canonical;
 		}
@@ -691,7 +781,12 @@ final class NativePluginUpdater {
 			);
 		}
 
-		$mapped = $remoteRoot . $this->installedDirectory . '/';
+		$mapped  = $remoteRoot . $this->installedDirectory . '/';
+		$blocked = $this->renewPendingInstall();
+		if ( $blocked instanceof \WP_Error ) {
+			$this->clearPendingInstall();
+			return $blocked;
+		}
 		if ( $wp_filesystem->is_dir( $mapped )
 			|| true !== $wp_filesystem->move(
 				rtrim( $canonical, '/' ),
@@ -704,8 +799,12 @@ final class NativePluginUpdater {
 				'WordPress could not safely map the staged package to the installed directory.'
 			);
 		}
+		$blocked = $this->renewPendingInstall();
+		if ( $blocked instanceof \WP_Error ) {
+			$this->clearPendingInstall();
+			return $blocked;
+		}
 
-		$this->clearPendingInstall();
 		$this->debugLog( 'staged_directory_mapped' );
 		return $mapped;
 	}
@@ -763,8 +862,17 @@ final class NativePluginUpdater {
 			return;
 		}
 
-		delete_site_transient( $this->cacheKey() );
-		$this->storeDiagnostic( 'update_completed', 'current' );
+		$this->persistNativeState(
+			array(
+				'schema'     => self::CACHE_SCHEMA,
+				'status'     => 'current',
+				'checked_at' => $this->now(),
+				'diagnostic' => array(
+					'code'  => 'update_completed',
+					'state' => 'current',
+				),
+			)
+		);
 		$this->clearPendingInstall();
 		$this->debugLog( 'update_completed' );
 	}
@@ -855,12 +963,13 @@ final class NativePluginUpdater {
 	 * @return array<string, mixed>
 	 */
 	public function diagnostics(): array {
-		$state           = $this->cachedState();
-		$offer           = $this->validatedOffer( $state['offer'] ?? null );
-		$validation      = $this->validatedCandidateValidation(
+		$state            = $this->cachedState();
+		$offer            = $this->validatedOffer( $state['offer'] ?? null );
+		$validation       = $this->validatedCandidateValidation(
 			$state['candidate_validation'] ?? ( $offer['candidate_validation'] ?? null )
 		);
-		$validationArray = $validation?->toArray();
+		$validationArray  = $validation?->toArray();
+		$installedVersion = $this->header( 'Version', '' );
 
 		return array(
 			'registered'                => $this->registered,
@@ -881,13 +990,20 @@ final class NativePluginUpdater {
 			'next_check'                => is_int( $state['cooldown_until'] ?? null )
 				? $state['cooldown_until']
 				: null,
-			'installed_version'         => $this->header( 'Version', '' ),
+			'installed_version'         => $installedVersion,
+			'version_relationship'      => null === $validation
+				? ReleaseVersion::RELATIONSHIP_INVALID
+				: $validation->relationshipTo( $installedVersion ),
 			'authentication_configured' => $this->accessToken->isConfigured(),
 			'private_support'           => true,
 			'candidate_validation'      => $validationArray,
 			'release_tag'               => $validation?->releaseTag(),
 			'release_version'           => $validation?->releaseVersion(),
 			'package_header_version'    => $validation?->packageHeaderVersion(),
+			'automatic_profile'         => $offer['automatic_profile'] ?? null,
+			'automatic_eligible'        => 'automatic' !== $this->autoUpdatePolicy
+				? null
+				: null !== $offer,
 		);
 	}
 
@@ -898,12 +1014,25 @@ final class NativePluginUpdater {
 	 * not make a remote request or invoke an upgrader.
 	 */
 	public function refreshCache(): bool {
-		$packageDeleted = delete_site_transient( $this->cacheKey() );
-		$coreDeleted    = delete_site_transient(
+		$claim        = $this->operations->acquire(
+			$this->coordinationTargetKey(),
+			'native_state:refresh',
+			self::OPERATION_TTL
+		);
+		$stateCleared = $claim instanceof ReleaseOperationClaim
+			&& true === $this->operations->publish(
+				$claim,
+				ReleaseOperationCoordinator::NATIVE_STATE,
+				array()
+			);
+		if ( $claim instanceof ReleaseOperationClaim && ! $stateCleared ) {
+			$this->operations->release( $claim );
+		}
+		$coreDeleted = delete_site_transient(
 			'plugin' === $this->targetType ? 'update_plugins' : 'update_themes'
 		);
 
-		return $packageDeleted || $coreDeleted;
+		return $stateCleared || $coreDeleted;
 	}
 
 	/**
@@ -933,7 +1062,10 @@ final class NativePluginUpdater {
 		if ( ! $forceCheck
 			&& null !== $current
 			&& ( null === $installedVersion
-				|| version_compare( $current['version'], $installedVersion, '<=' )
+				|| ReleaseVersion::RELATIONSHIP_NEWER !== ReleaseVersion::relationship(
+					$current['version'],
+					$installedVersion
+				)
 				|| isset( $current['candidate_validation'] ) )
 			&& $age >= 0
 			&& $age < $this->cacheDuration
@@ -948,82 +1080,111 @@ final class NativePluginUpdater {
 		) {
 			return null;
 		}
+		$claim = $this->operations->acquire(
+			$this->coordinationTargetKey(),
+			'native_discovery:' . $this->cacheKey(),
+			self::OPERATION_TTL
+		);
+		if ( $claim instanceof \WP_Error ) {
+			$this->debugLog( 'operation_busy' );
+			return null;
+		}
+		$this->activeDiscoveryClaim = $claim;
+		$state                      = $this->nativeStateFromClaim( $claim );
+		$offer                      = $this->validatedOffer( $state['offer'] ?? null );
+		$current                    = $this->validatedOffer( $state['current'] ?? null, false );
 
-		$conditional = $this->conditionalFromState( $state );
-		$query       = $this->query( $conditional );
-		$list        = $this->artifacts->listReleases( $query );
-		if ( $list instanceof \WP_Error ) {
-			$this->storeRemoteError( $list, $conditional, $state );
-			return null;
-		}
-		if ( $list->rateLimit()->isLimited() ) {
-			$this->storeCooldown(
-				$state,
-				$list->conditional(),
-				$list->rateLimit()->cooldownSeconds() ?? $this->failureCacheDuration
-			);
-			return null;
-		}
-		if ( $list->isNotModified() ) {
-			$reusable = $offer ?? $current;
-			if ( null === $reusable ) {
-				$this->storeUnavailable(
-					'not_modified_without_cached_offer',
-					new ConditionalState(),
-					$state
+		try {
+			$conditional = $this->conditionalFromState( $state );
+			$query       = $this->query( $conditional );
+			$list        = $this->artifacts->listReleases( $query );
+			if ( $list instanceof \WP_Error ) {
+				$this->storeRemoteError( $list, $conditional, $state );
+				return null;
+			}
+			$blocked = $this->renewDiscoveryClaim();
+			if ( $blocked instanceof \WP_Error ) {
+				return null;
+			}
+			if ( $list->rateLimit()->isLimited() ) {
+				$this->storeCooldown(
+					$state,
+					$list->conditional(),
+					$list->rateLimit()->cooldownSeconds() ?? $this->failureCacheDuration
 				);
 				return null;
 			}
-			$descriptor = $this->artifacts->describeExact(
-				new ExactReleaseRequest( $query, $reusable['release_id'], $reusable['tag'] )
-			);
-			if ( $descriptor instanceof \WP_Error
+			if ( $list->isNotModified() ) {
+				$reusable = $offer ?? $current;
+				if ( null === $reusable ) {
+					$this->storeUnavailable(
+						'not_modified_without_cached_offer',
+						new ConditionalState(),
+						$state
+					);
+					return null;
+				}
+				$descriptor = $this->artifacts->describeExact(
+					new ExactReleaseRequest( $query, $reusable['release_id'], $reusable['tag'] )
+				);
+				$blocked    = $this->renewDiscoveryClaim();
+				if ( $blocked instanceof \WP_Error ) {
+					return null;
+				}
+				if ( $descriptor instanceof \WP_Error
 				|| ! $this->descriptorMatchesOffer( $descriptor, $reusable )
-			) {
-				$code = $descriptor instanceof \WP_Error
+				) {
+					$code = $descriptor instanceof \WP_Error
 					? self::errorCode( $descriptor )
 					: 'github_updater_release_changed';
-				if ( $descriptor instanceof \WP_Error ) {
-					$this->storeRemoteError( $descriptor, new ConditionalState(), $state );
-				} else {
-					$this->storeUnavailable( $code, new ConditionalState(), $state );
+					if ( $descriptor instanceof \WP_Error ) {
+						$this->storeRemoteError( $descriptor, new ConditionalState(), $state );
+					} else {
+						$this->storeUnavailable( $code, new ConditionalState(), $state );
+					}
+					return null;
 				}
+				return $this->acceptDescriptor(
+					$descriptor,
+					$this->mergedConditional( $list->conditional(), $conditional ),
+					$installedVersion
+				);
+			}
+
+			$target = $this->identityTarget();
+			if ( $target instanceof \WP_Error ) {
+				$this->storeRemoteError( $target, $list->conditional(), $state );
 				return null;
 			}
-			return $this->acceptDescriptor(
-				$descriptor,
-				$this->mergedConditional( $list->conditional(), $conditional ),
-				$installedVersion
+			$selected = $this->candidates->select(
+				$list,
+				$query,
+				$target,
+				$this->assurance,
+				$installedVersion,
+				fn (): ?\WP_Error => $this->renewDiscoveryClaim()
 			);
-		}
+			if ( $selected instanceof \WP_Error ) {
+				$this->storeRemoteError( $selected, $list->conditional(), $state );
+				return null;
+			}
+			if ( null === $selected ) {
+				$this->storeUnavailable( 'no_eligible_release', $list->conditional(), $state );
+				return null;
+			}
 
-		$target = $this->identityTarget();
-		if ( $target instanceof \WP_Error ) {
-			$this->storeRemoteError( $target, $list->conditional(), $state );
-			return null;
+			return $this->acceptDescriptor(
+				$selected['descriptor'],
+				$list->conditional(),
+				$installedVersion,
+				$selected['validation']
+			);
+		} finally {
+			if ( null !== $this->activeDiscoveryClaim ) {
+				$this->operations->release( $this->activeDiscoveryClaim );
+				$this->activeDiscoveryClaim = null;
+			}
 		}
-		$selected = $this->candidates->select(
-			$list,
-			$query,
-			$target,
-			$this->assurance,
-			$installedVersion
-		);
-		if ( $selected instanceof \WP_Error ) {
-			$this->storeRemoteError( $selected, $list->conditional(), $state );
-			return null;
-		}
-		if ( null === $selected ) {
-			$this->storeUnavailable( 'no_eligible_release', $list->conditional(), $state );
-			return null;
-		}
-
-		return $this->acceptDescriptor(
-			$selected['descriptor'],
-			$list->conditional(),
-			$installedVersion,
-			$selected['validation']
-		);
 	}
 
 	/**
@@ -1039,7 +1200,10 @@ final class NativePluginUpdater {
 	): ?array {
 		$candidate = $this->offerFromDescriptor( $descriptor );
 		if ( null !== $installedVersion
-			&& version_compare( $candidate['version'], $installedVersion, '<=' )
+			&& ReleaseVersion::RELATIONSHIP_NEWER !== ReleaseVersion::relationship(
+				$candidate['version'],
+				$installedVersion
+			)
 		) {
 			$this->storeCurrent( $candidate, $conditional );
 			return null;
@@ -1053,12 +1217,23 @@ final class NativePluginUpdater {
 			$this->storeCandidateRejected( $candidate, $validation, $conditional );
 			return null;
 		}
+		$automaticRejection = $this->assurance->automaticEligibility( $descriptor );
+		if ( $automaticRejection instanceof \WP_Error ) {
+			if ( 'automatic' === $this->autoUpdatePolicy ) {
+				$this->storeRemoteError( $automaticRejection, $conditional, $this->cachedState() );
+				return null;
+			}
+		} else {
+			$candidate['automatic_profile'] = ReleaseAssurance::AUTOMATIC_PROFILE_REVISION;
+		}
 
 		$offer                         = $candidate;
 		$offer['requires']             = $validation->requiresWordPress();
 		$offer['requires_php']         = $validation->requiresPhp();
 		$offer['candidate_validation'] = $validation->toArray();
-		$this->storeAvailable( $offer, $conditional );
+		if ( ! $this->storeAvailable( $offer, $conditional ) ) {
+			return null;
+		}
 		$this->debugLog( 'release_selected', array( 'version' => $offer['version'] ) );
 		return $offer;
 	}
@@ -1072,7 +1247,14 @@ final class NativePluginUpdater {
 			throw new \LogicException( 'A validated release descriptor must have a valid package identity target.' );
 		}
 
-		return $this->candidates->validate( $descriptor, $target, $this->assurance );
+		return $this->candidates->validate(
+			$descriptor,
+			$target,
+			$this->assurance,
+			null === $this->activeDiscoveryClaim
+				? null
+				: fn (): ?\WP_Error => $this->renewDiscoveryClaim()
+		);
 	}
 
 	/**
@@ -1204,6 +1386,19 @@ final class NativePluginUpdater {
 		) {
 			return null;
 		}
+		$automaticProfile = $offer['automatic_profile'] ?? null;
+		if ( null !== $automaticProfile
+			&& ( ReleaseAssurance::AUTOMATIC_PROFILE_REVISION !== $automaticProfile
+				|| null === $providerRepositoryId
+				|| true !== $offer['immutable'] )
+		) {
+			return null;
+		}
+		if ( 'automatic' === $this->autoUpdatePolicy
+			&& ReleaseAssurance::AUTOMATIC_PROFILE_REVISION !== $automaticProfile
+		) {
+			return null;
+		}
 		if ( 1 !== preg_match( '/\A[a-f0-9]{40}\z/D', $offer['commit'] )
 			|| 1 !== preg_match( '/\A[a-f0-9]{64}\z/D', $offer['sha256'] )
 			|| ! str_starts_with( $offer['details_url'], 'https://github.com/' . $this->repository->canonical() . '/releases/' )
@@ -1255,18 +1450,64 @@ final class NativePluginUpdater {
 	 * @return array<string, mixed>
 	 */
 	private function cachedState(): array {
-		$state = get_site_transient( $this->cacheKey() );
-		return is_array( $state ) && self::CACHE_SCHEMA === ( $state['schema'] ?? null )
+		$state = $this->operations->state(
+			$this->coordinationTargetKey(),
+			ReleaseOperationCoordinator::NATIVE_STATE
+		);
+		return is_array( $state )
+			&& hash_equals( $this->cacheKey(), is_string( $state['_cache_key'] ?? null ) ? $state['_cache_key'] : '' )
+			&& self::CACHE_SCHEMA === ( $state['schema'] ?? null )
 			? $state
 			: array();
+	}
+
+	/** @return array<string, mixed> */
+	private function nativeStateFromClaim( ReleaseOperationClaim $claim ): array {
+		$state = $claim->results()[ ReleaseOperationCoordinator::NATIVE_STATE ] ?? array();
+		return is_array( $state )
+			&& hash_equals( $this->cacheKey(), is_string( $state['_cache_key'] ?? null ) ? $state['_cache_key'] : '' )
+			&& self::CACHE_SCHEMA === ( $state['schema'] ?? null )
+			? $state
+			: array();
+	}
+
+	/** @param array<string, mixed> $state */
+	private function persistNativeState( array $state ): bool {
+		$state['_cache_key'] = $this->cacheKey();
+		$claim               = $this->activeDiscoveryClaim ?? $this->pendingOperationClaim;
+		if ( null === $claim ) {
+			$acquired = $this->operations->acquire(
+				$this->coordinationTargetKey(),
+				'native_state:diagnostic',
+				self::OPERATION_TTL
+			);
+			if ( $acquired instanceof \WP_Error ) {
+				return false;
+			}
+			$claim = $acquired;
+		}
+		$published = $this->operations->publish(
+			$claim,
+			ReleaseOperationCoordinator::NATIVE_STATE,
+			$state
+		);
+		$completed = true === $published || $this->operations->release( $claim );
+		if ( $completed ) {
+			if ( $claim === $this->activeDiscoveryClaim ) {
+				$this->activeDiscoveryClaim = null;
+			}
+			if ( $claim === $this->pendingOperationClaim ) {
+				$this->pendingOperationClaim = null;
+			}
+		}
+		return true === $published;
 	}
 
 	/**
 	 * @param Offer $offer
 	 */
-	private function storeAvailable( array $offer, ConditionalState $conditional ): void {
-		set_site_transient(
-			$this->cacheKey(),
+	private function storeAvailable( array $offer, ConditionalState $conditional ): bool {
+		return $this->persistNativeState(
 			array(
 				'schema'      => self::CACHE_SCHEMA,
 				'status'      => 'available',
@@ -1277,8 +1518,7 @@ final class NativePluginUpdater {
 					'code'  => 'release_available',
 					'state' => 'ready',
 				),
-			),
-			$this->cacheDuration + 86400
+			)
 		);
 	}
 
@@ -1295,8 +1535,7 @@ final class NativePluginUpdater {
 		$validationArray = $validation->toArray();
 		$priorState      = $this->cachedState();
 		$offer           = $this->validatedOffer( $priorState['offer'] ?? null );
-		set_site_transient(
-			$this->cacheKey(),
+		$this->persistNativeState(
 			array(
 				'schema'               => self::CACHE_SCHEMA,
 				'status'               => 'unavailable',
@@ -1317,8 +1556,7 @@ final class NativePluginUpdater {
 					'code'  => $validation->code(),
 					'state' => CandidateValidation::BLOCKED,
 				),
-			),
-			$this->cacheDuration + 86400
+			)
 		);
 		$this->debugLog( 'candidate_blocked', array( 'code' => $validation->code() ) );
 	}
@@ -1331,8 +1569,7 @@ final class NativePluginUpdater {
 	 */
 	private function storeCurrent( array $release, ?ConditionalState $conditional = null ): void {
 		$state = $this->cachedState();
-		set_site_transient(
-			$this->cacheKey(),
+		$this->persistNativeState(
 			array(
 				'schema'      => self::CACHE_SCHEMA,
 				'status'      => 'current',
@@ -1352,8 +1589,7 @@ final class NativePluginUpdater {
 					'code'  => 'up_to_date',
 					'state' => 'current',
 				),
-			),
-			$this->cacheDuration + 86400
+			)
 		);
 	}
 
@@ -1371,8 +1607,7 @@ final class NativePluginUpdater {
 		$checkedAt       = is_int( $priorState['checked_at'] ?? null )
 			? $priorState['checked_at']
 			: null;
-		set_site_transient(
-			$this->cacheKey(),
+		$this->persistNativeState(
 			array(
 				'schema'      => self::CACHE_SCHEMA,
 				'status'      => 'unavailable',
@@ -1393,8 +1628,7 @@ final class NativePluginUpdater {
 						$normalizedCode
 					),
 				),
-			),
-			$this->cacheDuration + 86400
+			)
 		);
 		$this->debugLog( 'failure', array( 'code' => $normalizedCode ) );
 	}
@@ -1433,7 +1667,7 @@ final class NativePluginUpdater {
 				'repeats' => $repeats,
 			),
 		);
-		set_site_transient( $this->cacheKey(), $state, $this->cacheDuration + $cooldown );
+		$this->persistNativeState( $state );
 		$this->debugLog( 'failure', array( 'code' => 'rate_limited' ) );
 	}
 
@@ -1476,7 +1710,7 @@ final class NativePluginUpdater {
 			'state'   => sanitize_key( $diagnosticState ),
 			'repeats' => $repeats,
 		);
-		set_site_transient( $this->cacheKey(), $state, $this->cacheDuration );
+		$this->persistNativeState( $state );
 		if ( in_array( $diagnosticState, array( 'failed', 'unavailable', 'cooldown' ), true ) ) {
 			$this->debugLog( 'failure', array( 'code' => $normalizedCode ) );
 		}
@@ -1535,10 +1769,77 @@ final class NativePluginUpdater {
 		return 'https://github.com/' . strtolower( $this->repository->canonical() );
 	}
 
+	private function coordinationTargetKey(): string {
+		return implode(
+			"\0",
+			array(
+				$this->targetType,
+				$this->pluginSlug,
+				'theme' === $this->targetType ? 'style.css' : basename( $this->pluginBasename ),
+			)
+		);
+	}
+
+	private function renewDiscoveryClaim(): ?\WP_Error {
+		if ( null === $this->activeDiscoveryClaim ) {
+			return new \WP_Error(
+				'github_updater_operation_fence_lost',
+				'The release-discovery ownership fence was lost.'
+			);
+		}
+		$renewed = $this->operations->renew( $this->activeDiscoveryClaim, self::OPERATION_TTL );
+		if ( $renewed instanceof \WP_Error ) {
+			return $renewed;
+		}
+		$this->activeDiscoveryClaim = $renewed;
+		return null;
+	}
+
+	private function startPendingInstall( string $package ): ?\WP_Error {
+		if ( null !== $this->pendingOperationClaim ) {
+			return new \WP_Error(
+				'github_updater_operation_fence_lost',
+				'An updater installation fence is already active for this target.'
+			);
+		}
+		$claim = $this->operations->acquire(
+			$this->coordinationTargetKey(),
+			'native_install:' . substr( hash( 'sha256', $package ), 0, 40 ),
+			self::OPERATION_TTL
+		);
+		if ( $claim instanceof \WP_Error ) {
+			return $claim;
+		}
+		$this->pendingOperationClaim = $claim;
+		return null;
+	}
+
+	private function renewPendingInstall(): ?\WP_Error {
+		if ( null === $this->pendingOperationClaim ) {
+			return new \WP_Error(
+				'github_updater_operation_fence_lost',
+				'The updater installation fence is unavailable.'
+			);
+		}
+		$renewed = $this->operations->renew( $this->pendingOperationClaim, self::OPERATION_TTL );
+		if ( $renewed instanceof \WP_Error ) {
+			return $renewed;
+		}
+		$this->pendingOperationClaim = $renewed;
+		return null;
+	}
+
 	private function clearPendingInstall(): void {
-		$this->pendingArchive = null;
-		$this->pendingClaim   = null;
-		$this->pendingOffer   = null;
+		if ( null !== $this->pendingClaim ) {
+			$this->pendingClaim->discard();
+		}
+		if ( null !== $this->pendingOperationClaim ) {
+			$this->operations->release( $this->pendingOperationClaim );
+		}
+		$this->pendingArchive        = null;
+		$this->pendingClaim          = null;
+		$this->pendingOffer          = null;
+		$this->pendingOperationClaim = null;
 	}
 
 	private function normalizedPath( string $path ): string {
@@ -1813,6 +2114,7 @@ final class NativePluginUpdater {
 
 	private function downloadError( string $code, string $message ): \WP_Error {
 		$this->storeDiagnostic( $code, 'failed' );
+		$this->clearPendingInstall();
 		return new \WP_Error( $code, $message );
 	}
 

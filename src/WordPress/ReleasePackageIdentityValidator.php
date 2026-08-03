@@ -18,6 +18,12 @@ final class ReleasePackageIdentityValidator {
 
 	private const MAX_HEADER_BYTES = 8192;
 
+	private bool $zipAvailable;
+
+	public function __construct() {
+		$this->zipAvailable = class_exists( '\\ZipArchive' );
+	}
+
 	public function validate(
 		VerifiedArtifact $artifact,
 		ArtifactDescriptor $descriptor,
@@ -121,10 +127,10 @@ final class ReleasePackageIdentityValidator {
 		string $packageType,
 		?string $expectedUpdateUri = null
 	) {
-		if ( ! class_exists( '\\ZipArchive' ) ) {
+		if ( ! $this->zipAvailable ) {
 			return self::archiveError(
-				CandidateValidation::ARCHIVE_UNREADABLE,
-				'The release archive cannot be inspected.'
+				CandidateValidation::ZIP_EXTENSION_UNAVAILABLE,
+				'The PHP ext-zip platform requirement is unavailable; the release archive cannot be inspected.'
 			);
 		}
 

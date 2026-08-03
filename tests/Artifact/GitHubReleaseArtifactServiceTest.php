@@ -135,6 +135,58 @@ final class GitHubReleaseArtifactServiceTest extends TestCase {
 		);
 	}
 
+	/**
+	 * Characterize SemVer precedence across every prerelease shape accepted by
+	 * ReleaseVersion. These assertions intentionally describe the public version
+	 * contract rather than PHP's package-version ordering rules.
+	 *
+	 * @dataProvider semanticPrereleaseOrderingProvider
+	 */
+	public function testAcceptedReleaseVersionsUseSemanticPrecedence(
+		string $older,
+		string $newer
+	): void {
+		$transport = new FakeTransport();
+		$transport->queue(
+			new Response(
+				200,
+				array(),
+				$this->json(
+					array(
+						$this->listRelease( 1, 'v' . $older, str_contains( $older, '-' ) ),
+						$this->listRelease( 2, 'v' . $newer, str_contains( $newer, '-' ) ),
+					)
+				)
+			)
+		);
+
+		$result = $this->service( $transport )->listReleases(
+			$this->query( ReleaseQuery::PRERELEASE )
+		);
+
+		self::assertNotInstanceOf( \WP_Error::class, $result );
+		self::assertSame(
+			array( $newer, $older ),
+			array_map( static fn ( $item ): string => $item->version(), $result->releases() )
+		);
+	}
+
+	/**
+	 * @return array<string, array{string, string}>
+	 */
+	public static function semanticPrereleaseOrderingProvider(): array {
+		return array(
+			'alphabetic identifiers'      => array( '1.0.0-x.1', '1.0.0-y.1' ),
+			'numeric before alphanumeric' => array( '1.0.0-1', '1.0.0-alpha' ),
+			'longer identifier list'      => array( '1.0.0-alpha', '1.0.0-alpha.1' ),
+			'huge numeric identifier'     => array(
+				'1.0.0-999999999999999999999999999999',
+				'1.0.0-1000000000000000000000000000000',
+			),
+			'stable after its prerelease' => array( '1.0.0-rc.1', '1.0.0' ),
+		);
+	}
+
 	public function testConditionalListingRetainsValidatorsAndBoundsRequests(): void {
 		$transport = new FakeTransport();
 		$transport->queue(
@@ -548,49 +600,6 @@ final class GitHubReleaseArtifactServiceTest extends TestCase {
 		self::assertCount( 1, $temporaryFiles->deleted() );
 	}
 
-	/**
-	 * @dataProvider reachabilityProvider
-	 */
-	public function testDefaultBranchReachabilityRequiresExactMergeBase(
-		string $status,
-		string $mergeBase,
-		bool $expected
-	): void {
-		$transport = new FakeTransport();
-		$transport->queue(
-			new Response(
-				200,
-				array(),
-				$this->json(
-					array(
-						'status'            => $status,
-						'merge_base_commit' => array( 'sha' => $mergeBase ),
-					)
-				)
-			)
-		);
-
-		$result = $this->service( $transport )->isCommitReachableFromBranch(
-			$this->query(),
-			self::COMMIT,
-			'main'
-		);
-
-		self::assertSame( $expected, $result );
-	}
-
-	/**
-	 * @return array<string, array{0: string, 1: string, 2: bool}>
-	 */
-	public static function reachabilityProvider(): array {
-		return array(
-			'ahead'            => array( 'ahead', self::COMMIT, true ),
-			'identical'        => array( 'identical', self::COMMIT, true ),
-			'behind'           => array( 'behind', self::COMMIT, false ),
-			'wrong merge base' => array( 'ahead', str_repeat( 'a', 40 ), false ),
-		);
-	}
-
 	public function testPrivateRedirectDropsAuthorizationOutsideGitHubApi(): void {
 		$transport      = new FakeTransport();
 		$temporaryFiles = new FakeTemporaryFileFactory();
@@ -709,7 +718,7 @@ final class GitHubReleaseArtifactServiceTest extends TestCase {
 	/**
 	 * @dataProvider authenticationProvider
 	 */
-	public function testProspectiveZipOnlyJourneyUsesTwoListAndFiveRequestsPerExactPass(
+	public function testProspectiveZipOnlyJourneyUsesTwoListAndFourRequestsPerExactPass(
 		bool $authenticated
 	): void {
 		$credentialCalls = 0;
@@ -722,13 +731,11 @@ final class GitHubReleaseArtifactServiceTest extends TestCase {
 		$transport->queue( $this->repositoryResponse() );
 
 		$this->queueDescription( $transport, $release );
-		$transport->queue( $this->reachableResponse() );
-		$transport->queue( $this->repositoryResponse() );
 		$transport->queue( new Response( 200 ), self::ZIP );
+		$transport->queue( $this->repositoryResponse() );
 
 		$this->queueDescription( $transport, $release );
 		$transport->queue( new Response( 200 ), self::ZIP );
-		$transport->queue( $this->reachableResponse() );
 		$transport->queue( $this->repositoryResponse() );
 
 		$list = $service->listReleases( $query );
@@ -739,11 +746,10 @@ final class GitHubReleaseArtifactServiceTest extends TestCase {
 			new ExactReleaseRequest( $query, 77, self::TAG )
 		);
 		self::assertInstanceOf( ArtifactDescriptor::class, $inspected );
-		self::assertTrue( $service->isCommitReachableFromBranch( $query, self::COMMIT, 'main' ) );
 		$inspectionArtifact = $service->acquireDescribed( $inspected );
 		self::assertNotInstanceOf( \WP_Error::class, $inspectionArtifact );
 		self::assertTrue( $inspectionArtifact->discard() );
-		self::assertCount( 7, $transport->requests() );
+		self::assertCount( 6, $transport->requests() );
 
 		$acquired = $service->describeExact(
 			new ExactReleaseRequest( $query, 77, self::TAG )
@@ -751,10 +757,9 @@ final class GitHubReleaseArtifactServiceTest extends TestCase {
 		self::assertInstanceOf( ArtifactDescriptor::class, $acquired );
 		$installationArtifact = $service->acquireDescribed( $acquired );
 		self::assertNotInstanceOf( \WP_Error::class, $installationArtifact );
-		self::assertTrue( $service->isCommitReachableFromBranch( $query, self::COMMIT, 'main' ) );
 		self::assertTrue( $installationArtifact->discard() );
 
-		$this->assertZipOnlyRequestBudget( $transport, 12, 2, $authenticated, $credentialCalls );
+		$this->assertZipOnlyRequestBudget( $transport, 10, 2, $authenticated, $credentialCalls );
 	}
 
 	/**
@@ -855,19 +860,6 @@ final class GitHubReleaseArtifactServiceTest extends TestCase {
 				array(
 					'id'        => 123456789,
 					'full_name' => self::REPOSITORY,
-				)
-			)
-		);
-	}
-
-	private function reachableResponse(): Response {
-		return new Response(
-			200,
-			array(),
-			$this->json(
-				array(
-					'status'            => 'ahead',
-					'merge_base_commit' => array( 'sha' => self::COMMIT ),
 				)
 			)
 		);

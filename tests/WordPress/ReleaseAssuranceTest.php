@@ -42,6 +42,52 @@ final class ReleaseAssuranceTest extends TestCase {
 		);
 	}
 
+	public function testOnlyBuiltInAssuranceHasAReusableCacheRevision(): void {
+		$builtIn = new ReleaseAssurance();
+		$builtIn->seal();
+		self::assertSame( 'release-assurance-v1', $builtIn->cacheRevision() );
+
+		$custom = new ReleaseAssurance();
+		self::assertTrue( $custom->register( static fn (): null => null ) );
+		$custom->seal();
+		self::assertNull( $custom->cacheRevision() );
+	}
+
+	public function testAutomaticProfileRequiresStableRepositoryIdentityAndImmutability(): void {
+		$assurance = new ReleaseAssurance();
+		$assurance->seal();
+
+		$missingIdentity = $assurance->checkAutomatic(
+			$this->descriptor( null ),
+			$this->validation(),
+			str_repeat( 'a', 64 )
+		);
+		self::assertInstanceOf( \WP_Error::class, $missingIdentity );
+		self::assertSame(
+			'github_updater_automatic_repository_identity_required',
+			$missingIdentity->get_error_code()
+		);
+
+		$mutable = $assurance->checkAutomatic(
+			$this->descriptor( immutable: false ),
+			$this->validation(),
+			str_repeat( 'a', 64 )
+		);
+		self::assertInstanceOf( \WP_Error::class, $mutable );
+		self::assertSame(
+			'github_updater_automatic_immutable_release_required',
+			$mutable->get_error_code()
+		);
+
+		self::assertNull(
+			$assurance->checkAutomatic(
+				$this->descriptor(),
+				$this->validation(),
+				str_repeat( 'a', 64 )
+			)
+		);
+	}
+
 	public function testCheckerReceivesOnlyBoundedReleaseAndValidationEvidence(): void {
 		$received  = null;
 		$assurance = new ReleaseAssurance();
@@ -127,8 +173,11 @@ final class ReleaseAssuranceTest extends TestCase {
 		);
 	}
 
-	private function descriptor(): ArtifactDescriptor {
-		$repository = Repository::fromString( 'owner/example', '123' );
+	private function descriptor(
+		?string $repositoryId = '123',
+		bool $immutable = true
+	): ArtifactDescriptor {
+		$repository = Repository::fromString( 'owner/example', $repositoryId );
 		self::assertInstanceOf( Repository::class, $repository );
 
 		return new ArtifactDescriptor(
@@ -141,7 +190,7 @@ final class ReleaseAssuranceTest extends TestCase {
 			false,
 			'https://github.com/owner/example/releases/tag/v1.2.3',
 			new ReleaseAsset( 7, 'example-1.2.3.zip', 100, str_repeat( 'a', 64 ) ),
-			true
+			$immutable
 		);
 	}
 

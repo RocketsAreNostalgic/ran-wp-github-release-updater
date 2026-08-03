@@ -12,6 +12,10 @@ use RAN\WPGitHubReleaseUpdater\V1\Artifact\ArtifactDescriptor;
 final class ReleaseAssurance {
 	public const REGISTRATION_ACTION = 'ran_wp_github_release_updater_v1_assurance_registration';
 
+	public const AUTOMATIC_PROFILE_REVISION = 'github-native-immutable-v1';
+
+	private const CACHE_REVISION = 'release-assurance-v1';
+
 	private static ?self $selected = null;
 
 	/** @var callable(array<string, mixed>): mixed|null */
@@ -80,6 +84,59 @@ final class ReleaseAssurance {
 	}
 
 	/**
+	 * Return the stable built-in cache identity only when no caller checker can
+	 * change the verdict. Custom assurance therefore remains request-fresh.
+	 */
+	public function cacheRevision(): ?string {
+		return $this->invalid || null !== $this->checker
+			? null
+			: self::CACHE_REVISION;
+	}
+
+	/**
+	 * Enforce the fixed GitHub-native profile required for automatic updates.
+	 *
+	 * @return null|\WP_Error
+	 */
+	public function checkAutomatic(
+		ArtifactDescriptor $descriptor,
+		CandidateValidation $validation,
+		string $localSha256
+	) {
+		$eligibility = $this->automaticEligibility( $descriptor );
+		if ( $eligibility instanceof \WP_Error ) {
+			return $eligibility;
+		}
+
+		return $this->check( $descriptor, $validation, $localSha256 );
+	}
+
+	/**
+	 * Enforce the descriptor-only portion of the fixed automatic profile.
+	 *
+	 * This can run before an offer is cached; the ZIP-backed assurance check is
+	 * still repeated against fresh bytes immediately before installation.
+	 *
+	 * @return null|\WP_Error
+	 */
+	public function automaticEligibility( ArtifactDescriptor $descriptor ) {
+		if ( null === $descriptor->repository()->providerRepositoryId() ) {
+			return self::automaticError(
+				'github_updater_automatic_repository_identity_required',
+				'Automatic updates require a stable GitHub repository identity.'
+			);
+		}
+		if ( ! $descriptor->isImmutable() ) {
+			return self::automaticError(
+				'github_updater_automatic_immutable_release_required',
+				'Automatic updates require an immutable published GitHub Release.'
+			);
+		}
+
+		return null;
+	}
+
+	/**
 	 * @return null|\WP_Error
 	 */
 	public function check(
@@ -137,5 +194,9 @@ final class ReleaseAssurance {
 			$code,
 			'The optional GitHub release assurance policy rejected this package.'
 		);
+	}
+
+	private static function automaticError( string $code, string $message ): \WP_Error {
+		return new \WP_Error( $code, $message );
 	}
 }

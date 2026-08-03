@@ -14,6 +14,7 @@ use RAN\WPGitHubReleaseUpdater\V1\Http\WordPressTemporaryFileFactory;
 use RAN\WPGitHubReleaseUpdater\V1\WordPress\CandidateValidation;
 use RAN\WPGitHubReleaseUpdater\V1\WordPress\PackageIdentityTarget;
 use RAN\WPGitHubReleaseUpdater\V1\WordPress\ReleasePackageIdentityValidator;
+use ReflectionProperty;
 use Tests\Support\WordPressState;
 
 spl_autoload_register(
@@ -88,6 +89,10 @@ final class ReleasePackageIdentityValidatorTest extends TestCase {
 		self::assertTrue( $result->isReady() );
 		self::assertSame( 'v2.1.0', $result->releaseTag() );
 		self::assertSame( '2.1.0', $result->releaseVersion() );
+		self::assertSame( 'newer', $result->relationshipTo( '2.0.9' ) );
+		self::assertSame( 'same', $result->relationshipTo( '2.1' ) );
+		self::assertSame( 'older', $result->relationshipTo( '2.1.1' ) );
+		self::assertSame( 'invalid', $result->relationshipTo( 'not-a-version+' ) );
 		self::assertSame( '2.1', $result->packageHeaderVersion() );
 		self::assertSame( 'plugin', $result->identity()['package_type'] );
 	}
@@ -108,6 +113,33 @@ final class ReleasePackageIdentityValidatorTest extends TestCase {
 
 		self::assertTrue( $result->isReady() );
 		self::assertSame( 'example-theme/style.css', $result->identity()['header_file'] );
+	}
+
+	public function testMissingZipExtensionProducesAnExactPlatformDiagnostic(): void {
+		$validator = new ReleasePackageIdentityValidator();
+		$available = new ReflectionProperty( $validator, 'zipAvailable' );
+		$available->setValue( $validator, false );
+
+		$result = $validator->validate(
+			$this->archive( array( 'example-plugin/example-plugin.php' => $this->pluginHeader() ) ),
+			$this->descriptor(),
+			$this->pluginTarget()
+		);
+
+		self::assertFalse( $result->isReady() );
+		self::assertSame( CandidateValidation::ZIP_EXTENSION_UNAVAILABLE, $result->code() );
+		self::assertInstanceOf( CandidateValidation::class, CandidateValidation::fromArray( $result->toArray() ) );
+
+		$prospective = $validator->validateProspective(
+			$this->archive( array( 'example-plugin/example-plugin.php' => $this->pluginHeader() ) ),
+			$this->descriptor(),
+			'plugin',
+			'https://github.com/RocketsAreNostalgic/example-plugin'
+		);
+
+		self::assertInstanceOf( \WP_Error::class, $prospective );
+		self::assertSame( CandidateValidation::ZIP_EXTENSION_UNAVAILABLE, $prospective->get_error_code() );
+		self::assertStringContainsString( 'PHP ext-zip platform requirement is unavailable', $prospective->get_error_message() );
 	}
 
 	/**
