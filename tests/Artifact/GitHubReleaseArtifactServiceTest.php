@@ -359,6 +359,45 @@ final class GitHubReleaseArtifactServiceTest extends TestCase {
 		self::assertCount( 2, $transport->requests() );
 	}
 
+	public function testReleaseUrlAcceptsGitHubRepositoryCasingDifferences(): void {
+		$transport           = new FakeTransport();
+		$release             = $this->release();
+		$release['html_url'] = 'https://github.com/rocketsarenostalgic/EXAMPLE-PLUGIN/releases/tag/' . self::TAG;
+		$this->queueDescription( $transport, $release );
+
+		$result = $this->service( $transport )->describeExact(
+			new ExactReleaseRequest( $this->query(), 77, self::TAG )
+		);
+
+		self::assertInstanceOf( ArtifactDescriptor::class, $result );
+		self::assertSame( $release['html_url'], $result->detailsUrl() );
+	}
+
+	/**
+	 * @dataProvider invalidStructuralReleaseUrlProvider
+	 */
+	public function testReleaseUrlStillRejectsWrongStructuralAuthority( string $url ): void {
+		$transport           = new FakeTransport();
+		$release             = $this->release();
+		$release['html_url'] = $url;
+		$transport->queue( new Response( 200, array(), $this->json( $release ) ) );
+
+		$result = $this->service( $transport )->describeExact(
+			new ExactReleaseRequest( $this->query(), 77, self::TAG )
+		);
+
+		$this->assertErrorCode( 'github_updater_invalid_release_url', $result );
+	}
+
+	/** @return array<string, array{string}> */
+	public static function invalidStructuralReleaseUrlProvider(): array {
+		return array(
+			'wrong repository' => array( 'https://github.com/RocketsAreNostalgic/other/releases/tag/v1.2.3' ),
+			'user info'        => array( 'https://github.com@example.test/RocketsAreNostalgic/example-plugin/releases/tag/v1.2.3' ),
+			'query'            => array( 'https://github.com/RocketsAreNostalgic/example-plugin/releases/tag/v1.2.3?next=evil' ),
+		);
+	}
+
 	public function testFreshDescriptionExposesChangedZipAndImmutableIdentity(): void {
 		$transport = new FakeTransport();
 		$service   = $this->service( $transport );

@@ -341,11 +341,7 @@ final class GitHubReleaseArtifactService {
 		}
 
 		$detailsUrl = is_string( $release['html_url'] ?? null ) ? $release['html_url'] : '';
-		$prefix     = 'https://github.com/' . $query->repository()->canonical() . '/releases/';
-		if ( strlen( $detailsUrl ) > 2048
-			|| 1 === preg_match( '/[\x00-\x20\x7f]/', $detailsUrl )
-			|| ! str_starts_with( $detailsUrl, $prefix )
-		) {
+		if ( ! $this->isReleaseUrl( $detailsUrl, $query->repository() ) ) {
 			return new \WP_Error( 'github_updater_invalid_release_url', 'The GitHub Release URL is invalid.' );
 		}
 
@@ -372,6 +368,33 @@ final class GitHubReleaseArtifactService {
 			$zip,
 			$release['immutable']
 		);
+	}
+
+	private function isReleaseUrl( string $url, Repository $repository ): bool {
+		if ( strlen( $url ) > 2048 || 1 === preg_match( '/[\x00-\x20\x7f]/', $url ) ) {
+			return false;
+		}
+		$parts = parse_url( $url );
+		if ( ! is_array( $parts )
+			|| 'https' !== strtolower( (string) ( $parts['scheme'] ?? '' ) )
+			|| 'github.com' !== strtolower( (string) ( $parts['host'] ?? '' ) )
+			|| isset( $parts['user'] )
+			|| isset( $parts['pass'] )
+			|| isset( $parts['port'] )
+			|| isset( $parts['query'] )
+			|| isset( $parts['fragment'] )
+			|| ! is_string( $parts['path'] ?? null )
+		) {
+			return false;
+		}
+
+		$path       = explode( '/', ltrim( $parts['path'], '/' ), 4 );
+		$repository = explode( '/', $repository->canonical(), 2 );
+		return 4 === count( $path )
+			&& 0 === strcasecmp( rawurldecode( $path[0] ), $repository[0] )
+			&& 0 === strcasecmp( rawurldecode( $path[1] ), $repository[1] )
+			&& 'releases' === $path[2]
+			&& '' !== $path[3];
 	}
 
 	/**

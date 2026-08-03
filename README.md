@@ -60,16 +60,19 @@ re-registering the updater. Authorization is attached only to
 through WordPress safe-HTTP policy and an exact GitHub asset-host allowlist, and
 Authorization is permanently stripped when the chain leaves the API host.
 
-For the exact verified archive, the package uses Core's `pre_unzip_file` report
-to reject extraction requirements above 256 MiB. After Core extracts the ZIP,
-it validates the canonical root, entry file, version and compatibility headers.
+Preflight caps total expanded archive entries at 127,826,407 bytes (about
+121.9 MiB), keeping WordPress Core's `2.1` working-space estimate within the
+documented 256 MiB ceiling. The package also rejects a larger Core
+`pre_unzip_file` report for the exact verified archive. After Core extracts the
+ZIP, it validates the canonical root, entry file, version and compatibility headers.
 If the plugin or theme is installed under a safe noncanonical directory name,
 it maps only Core's staged directory through `WP_Filesystem`; it never renames,
 deletes or copies the live installed directory itself.
 
 The staged header check remains a defense-in-depth guard after Core extraction.
-It applies the same `2.1`/`2.1.0` comparison and reports a release-version
-mismatch without attempting to repair the package.
+It reads a size-bounded metadata file through the active `WP_Filesystem`
+transport, applies the same `2.1`/`2.1.0` comparison and reports a
+release-version mismatch without attempting to repair the package.
 
 Failures are retained only as bounded expiring state inside the target's
 database-authoritative coordination row. Default
@@ -109,6 +112,7 @@ $createUpdater = require __DIR__
 $updater = $createUpdater(
 	pluginFile: __FILE__,
 	repository: 'RocketsAreNostalgic/example-plugin',
+	providerRepositoryId: '123456789',
 	pluginSlug: 'example-plugin',
 	channel: 'stable',
 	accessToken: null,
@@ -144,9 +148,11 @@ completion, notice, refresh, or HTTP work. This is distinct from
 `autoUpdatePolicy: 'disabled'`, which suppresses an offer but can still perform
 release discovery.
 
-Managed targets may additionally pass their stored GitHub numeric repository
-identity as `providerRepositoryId`. Standalone native targets may omit it; when
-present, cached offers and final acquisition are bound to that stable identity.
+Every native target must pass GitHub's stable numeric repository identity as
+`providerRepositoryId`. Read the repository's `id` from GitHub's repository API
+when configuring the integration. Discovery, cached offers and final
+acquisition are then bound to the same repository even if its owner or name is
+later transferred or recreated.
 
 The supported integration surfaces are this bootstrap facade and the managed
 preflight below. Classes under `src/Artifact` implement the trust engine and
@@ -369,13 +375,22 @@ records passive release status without offering an install.
 The legacy `site-controlled`, `forced-on`, and `forced-off` values remain
 accepted for existing plugin integrations.
 
-Native discovery scans at most two 20-release pages and describes at most eight
-compatible candidates. Release-list responses are capped at 256 KiB per page
+Native discovery scans at most two 20-release pages and describes and downloads
+at most two ZIP-backed compatibility candidates. The prospective selection UI
+still lists up to eight lightweight release summaries without inspecting ZIPs.
+Release-list responses are capped at 256 KiB per page
 and 512 KiB in total. Every request has a ten-second timeout and follows at most one validated
 redirect. Authentication, transport and rate-limit failures retain their exact
 diagnostic classification and cooldown. A failed or exhausted discovery keeps
 the last verified cache record but returns the incoming WordPress host-filter
 value; only a verified RAN offer or the explicit disabled policy replaces it.
+
+One compatible cold target uses five logical requests, six transport hops and
+one ZIP. The terminal two-incompatible case is capped at nine logical requests,
+11 transport hops and two ZIPs per target. At 1/5/10/20 independent targets,
+that terminal envelope is therefore 9/45/90/180 logical requests,
+11/55/110/220 transport hops and 2/10/20/40 ZIPs. Multi-target consumers should
+configure authenticated GitHub access; rate limiting remains fail-closed.
 
 `$updater->refresh()` clears only this target's package cache and Core's native
 plugin or theme update transient. It performs no remote request; the next normal

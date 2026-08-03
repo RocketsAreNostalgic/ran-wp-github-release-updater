@@ -978,6 +978,7 @@ $ran_wp_github_release_updater_candidate_id       =
 return static function (
 	string $pluginFile,
 	string $repository,
+	string $providerRepositoryId,
 	?string $pluginSlug = null,
 	string $channel = 'stable',
 	string|callable|null $accessToken = null,
@@ -1002,6 +1003,7 @@ return static function (
 		array(
 			'pluginFile'           => $pluginFile,
 			'repository'           => $repository,
+			'providerRepositoryId' => $providerRepositoryId,
 			'pluginSlug'           => $resolvedPluginSlug,
 			'channel'              => $channel,
 			'accessToken'          => $accessToken,

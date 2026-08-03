@@ -17,6 +17,7 @@ $ran_updater_lifecycle_factory = require $ran_updater_lifecycle_bootstrap;
 $ran_updater_lifecycle_facade  = $ran_updater_lifecycle_factory(
 	pluginFile: __DIR__ . '/style.css',
 	repository: 'RocketsAreNostalgic/ran-updater-inactive',
+	providerRepositoryId: '100000005',
 	pluginSlug: 'ran-updater-inactive',
 	autoUpdatePolicy: 'manual',
 	targetType: 'theme',

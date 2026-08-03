@@ -15,6 +15,7 @@ $createUpdater = require dirname( __DIR__, 2 ) . '/bootstrap.php';
 $updater = $createUpdater(
 	pluginFile: __FILE__,
 	repository: 'RocketsAreNostalgic/booster-fixture-plugin',
+	providerRepositoryId: '123456789',
 	pluginSlug: 'booster-fixture-plugin',
 	channel: 'stable',
 	accessToken: null,

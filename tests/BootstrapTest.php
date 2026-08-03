@@ -53,6 +53,7 @@ final class BootstrapTest extends TestCase {
 			array(
 				'pluginFile',
 				'repository',
+				'providerRepositoryId',
 				'pluginSlug',
 				'channel',
 				'accessToken',
@@ -65,6 +66,8 @@ final class BootstrapTest extends TestCase {
 			array_keys( $parameters )
 		);
 		self::assertSame( 'stable', $parameters['channel']->getDefaultValue() );
+		self::assertFalse( $parameters['providerRepositoryId']->isOptional() );
+		self::assertSame( 'string', (string) $parameters['providerRepositoryId']->getType() );
 		self::assertNull( $parameters['accessToken']->getDefaultValue() );
 		self::assertSame(
 			'site-controlled',
@@ -103,6 +106,7 @@ final class BootstrapTest extends TestCase {
 		$facade         = $factory(
 			pluginFile: '/var/www/wp-content/plugins/renamed/main.php',
 			repository: 'RocketsAreNostalgic/example-plugin',
+			providerRepositoryId: '123456789',
 			pluginSlug: null,
 			channel: 'prerelease',
 			accessToken: $token_resolver,
@@ -138,6 +142,7 @@ final class BootstrapTest extends TestCase {
 			'RocketsAreNostalgic/example-plugin',
 			$targets[0]['repository']
 		);
+		self::assertSame( '123456789', $targets[0]['providerRepositoryId'] );
 		self::assertSame( 'example-plugin', $targets[0]['pluginSlug'] );
 		self::assertSame( 'prerelease', $targets[0]['channel'] );
 		self::assertSame( $token_resolver, $targets[0]['accessToken'] );
@@ -246,6 +251,7 @@ final class BootstrapTest extends TestCase {
 		$facade = $factory(
 			pluginFile: '/plugins/example/example.php',
 			repository: 'owner/repository',
+			providerRepositoryId: '123456789',
 			pluginSlug: 'canonical-plugin',
 			channel: 'stable',
 			accessToken: 'secret',
@@ -291,11 +297,13 @@ final class BootstrapTest extends TestCase {
 
 		$plugin = $factory(
 			pluginFile: '/plugins/example/example.php',
-			repository: 'owner/example'
+			repository: 'owner/example',
+			providerRepositoryId: '123456789'
 		);
 		$theme  = $factory(
 			pluginFile: '/themes/example-theme/style.css',
 			repository: 'owner/example-theme',
+			providerRepositoryId: '987654321',
 			targetType: 'theme',
 			stylesheet: 'locally-renamed-theme'
 		);
@@ -342,7 +350,8 @@ final class BootstrapTest extends TestCase {
 		$factory                                        = require dirname( __DIR__ ) . '/bootstrap.php';
 		$facade = $factory(
 			pluginFile: $pluginFile,
-			repository: 'owner/mapped-package'
+			repository: 'owner/mapped-package',
+			providerRepositoryId: '123456789'
 		);
 
 		$facade->register();
@@ -373,7 +382,8 @@ final class BootstrapTest extends TestCase {
 		$factory = require dirname( __DIR__ ) . '/bootstrap.php';
 		$facade  = $factory(
 			pluginFile: '/plugins/example/example.php',
-			repository: 'owner/example'
+			repository: 'owner/example',
+			providerRepositoryId: '123456789'
 		);
 
 		$facade->register();
@@ -417,7 +427,8 @@ final class BootstrapTest extends TestCase {
 		$factory = require dirname( __DIR__ ) . '/bootstrap.php';
 		$facade  = $factory(
 			pluginFile: '/plugins/example/example.php',
-			repository: 'owner/example'
+			repository: 'owner/example',
+			providerRepositoryId: '123456789'
 		);
 
 		$facade->register();
@@ -463,7 +474,8 @@ final class BootstrapTest extends TestCase {
 		$broker  = $GLOBALS['ran_wp_github_release_updater_v1_broker'];
 		$facade  = $factory(
 			pluginFile: '/plugins/example/example.php',
-			repository: 'owner/example'
+			repository: 'owner/example',
+			providerRepositoryId: '123456789'
 		);
 		$facade->register();
 
@@ -493,7 +505,8 @@ final class BootstrapTest extends TestCase {
 		);
 		$facade = $factory(
 			pluginFile: '/plugins/example/example.php',
-			repository: 'owner/example'
+			repository: 'owner/example',
+			providerRepositoryId: '123456789'
 		);
 		$facade->register();
 
@@ -518,7 +531,8 @@ final class BootstrapTest extends TestCase {
 		$broker  = $GLOBALS['ran_wp_github_release_updater_v1_broker'];
 		$facade  = $factory(
 			pluginFile: '/plugins/example/example.php',
-			repository: 'owner/example'
+			repository: 'owner/example',
+			providerRepositoryId: '123456789'
 		);
 		$facade->register();
 
@@ -583,11 +597,13 @@ final class BootstrapTest extends TestCase {
 		$broker  = $GLOBALS['ran_wp_github_release_updater_v1_broker'];
 		$valid   = $factory(
 			pluginFile: '/plugins/valid/valid.php',
-			repository: 'owner/valid'
+			repository: 'owner/valid',
+			providerRepositoryId: '123456789'
 		);
 		$unsafe  = $factory(
 			pluginFile: '/plugins/unsafe/unsafe.php',
-			repository: 'owner/unsafe'
+			repository: 'owner/unsafe',
+			providerRepositoryId: '987654321'
 		);
 		$valid->register();
 		$validRegistrationId = $this->firstRegistrationId( $broker );
@@ -657,7 +673,8 @@ final class BootstrapTest extends TestCase {
 		$broker  = $GLOBALS['ran_wp_github_release_updater_v1_broker'];
 		$facade  = $factory(
 			pluginFile: '/plugins/example/example.php',
-			repository: 'owner/example'
+			repository: 'owner/example',
+			providerRepositoryId: '123456789'
 		);
 		$facade->register();
 		$registrationId = $this->firstRegistrationId( $broker );
@@ -700,7 +717,8 @@ final class BootstrapTest extends TestCase {
 		$broker  = $GLOBALS['ran_wp_github_release_updater_v1_broker'];
 		$facade  = $factory(
 			pluginFile: '/plugins/example/example.php',
-			repository: 'owner/example'
+			repository: 'owner/example',
+			providerRepositoryId: '123456789'
 		);
 		$facade->register();
 
@@ -740,6 +758,7 @@ final class BootstrapTest extends TestCase {
 		$facade  = $factory(
 			pluginFile: $plugin_file,
 			repository: 'RocketsAreNostalgic/booster-fixture-plugin',
+			providerRepositoryId: '123456789',
 			pluginSlug: 'booster-fixture-plugin'
 		);
 		$facade->register();
