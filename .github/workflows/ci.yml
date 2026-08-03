@@ -70,6 +70,7 @@ jobs:
       - name: Install exact WordPress fixture
         run: |
           test "$(php -r 'echo PHP_MAJOR_VERSION . "." . PHP_MINOR_VERSION;')" = '8.2'
+          install -d -m 0700 build/wordpress
           wp core download --path=build/wordpress --version=${{ matrix.wordpress }}
           test "$(wp core version --path=build/wordpress)" = '${{ matrix.wordpress }}'
           wp config create --path=build/wordpress --dbname=wordpress_test --dbuser=root --dbpass=root --dbhost=127.0.0.1:3306
