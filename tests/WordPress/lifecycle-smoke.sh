@@ -66,6 +66,7 @@ for stylesheet in \
 done
 
 export RAN_UPDATER_LIFECYCLE_BOOTSTRAP="$root/bootstrap.php"
+export RAN_UPDATER_LIFECYCLE_ROOT="$root"
 
 "$php_bin" "$wp_cli" theme activate ran-updater-direct-active --path="$wordpress"
 "$php_bin" "$wp_cli" plugin activate ran-updater-lifecycle-registrar --path="$wordpress"
@@ -73,3 +74,13 @@ export RAN_UPDATER_LIFECYCLE_BOOTSTRAP="$root/bootstrap.php"
 
 "$php_bin" "$wp_cli" theme activate ran-updater-registrar-active --path="$wordpress"
 "$php_bin" "$wp_cli" eval-file "$root/tests/WordPress/assert-early-theme-registrar.php" --path="$wordpress"
+
+proof_status=0
+readback_status=0
+"$php_bin" "$wp_cli" eval-file "$root/tests/WordPress/upgrader-lifecycle-proof.php" --path="$wordpress" || proof_status=$?
+"$php_bin" "$wp_cli" eval-file "$root/tests/WordPress/upgrader-lifecycle-readback.php" --path="$wordpress" || readback_status=$?
+
+if (( proof_status != 0 || readback_status != 0 )); then
+	echo "The updater lifecycle proof failed (proof=$proof_status, readback=$readback_status)." >&2
+	exit 1
+fi
