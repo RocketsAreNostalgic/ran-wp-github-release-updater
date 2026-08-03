@@ -99,7 +99,7 @@ final class RanUpdaterLifecycleFailingFilesystem extends WP_Filesystem_Direct {
 
 	public function move( $source, $destination, $overwrite = false ) {
 		$source      = str_replace( '\\', '/', (string) $source );
-		$destination = str_replace( '\\', '/', (string) $destination );
+		$destination = rtrim( str_replace( '\\', '/', (string) $destination ), '/' );
 		if ( str_contains( $source, '/upgrade/' )
 			&& str_ends_with( $destination, '/themes/' . $this->theme_slug ) ) {
 			return false;
@@ -109,7 +109,7 @@ final class RanUpdaterLifecycleFailingFilesystem extends WP_Filesystem_Direct {
 	}
 
 	public function copy( $source, $destination, $overwrite = false, $mode = false ) {
-		$destination = str_replace( '\\', '/', (string) $destination );
+		$destination = rtrim( str_replace( '\\', '/', (string) $destination ), '/' );
 		if ( str_ends_with( $destination, '/themes/' . $this->theme_slug . '/zz-copy-failure.php' ) ) {
 			return false;
 		}
@@ -462,49 +462,52 @@ ran_updater_proof_assert( is_plugin_active( $ran_proof_auto_plugin_identifier ),
 $ran_proof_auto_plugin_updater->finalizePendingInstall();
 ran_updater_proof_delete_temp_backup( 'plugin', $ran_proof_auto_plugin_slug );
 
-$ran_proof_auto_plugin_updater->refreshCache();
-$ran_proof_auto_plugin_archive = ran_updater_proof_archive(
-	$ran_proof_auto_plugin_slug . '-4.0.0.zip',
-	array(
-		$ran_proof_auto_plugin_slug . '/' . $ran_proof_auto_plugin_slug . '.php' => ran_updater_proof_plugin_header( 'RAN Updater Automatic Proof Plugin', $ran_proof_auto_plugin_repository, '4.0.0' ),
-		$ran_proof_auto_plugin_slug . '/marker.txt' => 'plugin-automatic-fatal',
-	)
-);
-$ran_proof_archives[] = $ran_proof_auto_plugin_archive;
-$ran_proof_auto_plugin_client->configure( ran_updater_proof_descriptor( $ran_proof_auto_plugin_repository, '700000002', '4.0.0', 103, $ran_proof_auto_plugin_archive ), $ran_proof_auto_plugin_archive );
-$ran_proof_fatal_offer = ran_updater_proof_offer( $ran_proof_auto_plugin_updater, 'plugin', $ran_proof_auto_plugin_file, $ran_proof_auto_plugin_identifier );
-$ran_proof_fatal_automatic = new WP_Automatic_Updater();
-$ran_proof_fatal_completion_version = null;
-$ran_proof_capture_fatal_completion = static function ( object $upgrader, array $extra ) use ( &$ran_proof_fatal_completion_version, $ran_proof_auto_plugin_file, $ran_proof_auto_plugin_identifier ): void {
-	unset( $upgrader );
-	if ( $ran_proof_auto_plugin_identifier === ( $extra['plugin'] ?? null ) ) {
-		$ran_proof_fatal_completion_version = ran_updater_proof_read_version( $ran_proof_auto_plugin_file, 'plugin' );
-	}
-};
-add_action( 'upgrader_process_complete', $ran_proof_capture_fatal_completion, 1, 2 );
-try {
-	$ran_proof_fatal_result = ran_updater_proof_scrape(
-		true,
-		static fn () => $ran_proof_fatal_automatic->update( 'plugin', $ran_proof_fatal_offer )
+// Active-plugin fatal-error rollback was added to Core in WordPress 6.6.
+if ( method_exists( WP_Automatic_Updater::class, 'has_fatal_error' ) ) {
+	$ran_proof_auto_plugin_updater->refreshCache();
+	$ran_proof_auto_plugin_archive = ran_updater_proof_archive(
+		$ran_proof_auto_plugin_slug . '-4.0.0.zip',
+		array(
+			$ran_proof_auto_plugin_slug . '/' . $ran_proof_auto_plugin_slug . '.php' => ran_updater_proof_plugin_header( 'RAN Updater Automatic Proof Plugin', $ran_proof_auto_plugin_repository, '4.0.0' ),
+			$ran_proof_auto_plugin_slug . '/marker.txt' => 'plugin-automatic-fatal',
+		)
 	);
-} finally {
-	remove_action( 'upgrader_process_complete', $ran_proof_capture_fatal_completion, 1 );
+	$ran_proof_archives[] = $ran_proof_auto_plugin_archive;
+	$ran_proof_auto_plugin_client->configure( ran_updater_proof_descriptor( $ran_proof_auto_plugin_repository, '700000002', '4.0.0', 103, $ran_proof_auto_plugin_archive ), $ran_proof_auto_plugin_archive );
+	$ran_proof_fatal_offer = ran_updater_proof_offer( $ran_proof_auto_plugin_updater, 'plugin', $ran_proof_auto_plugin_file, $ran_proof_auto_plugin_identifier );
+	$ran_proof_fatal_automatic = new WP_Automatic_Updater();
+	$ran_proof_fatal_completion_version = null;
+	$ran_proof_capture_fatal_completion = static function ( object $upgrader, array $extra ) use ( &$ran_proof_fatal_completion_version, $ran_proof_auto_plugin_file, $ran_proof_auto_plugin_identifier ): void {
+		unset( $upgrader );
+		if ( $ran_proof_auto_plugin_identifier === ( $extra['plugin'] ?? null ) ) {
+			$ran_proof_fatal_completion_version = ran_updater_proof_read_version( $ran_proof_auto_plugin_file, 'plugin' );
+		}
+	};
+	add_action( 'upgrader_process_complete', $ran_proof_capture_fatal_completion, 1, 2 );
+	try {
+		$ran_proof_fatal_result = ran_updater_proof_scrape(
+			true,
+			static fn () => $ran_proof_fatal_automatic->update( 'plugin', $ran_proof_fatal_offer )
+		);
+	} finally {
+		remove_action( 'upgrader_process_complete', $ran_proof_capture_fatal_completion, 1 );
+	}
+	ran_updater_proof_finish_automatic( $ran_proof_fatal_automatic );
+	$ran_proof_fatal_result_summary = is_wp_error( $ran_proof_fatal_result )
+		? implode( ',', $ran_proof_fatal_result->get_error_codes() )
+		: get_debug_type( $ran_proof_fatal_result ) . ':' . var_export( $ran_proof_fatal_result, true );
+	ran_updater_proof_assert(
+		is_wp_error( $ran_proof_fatal_result ) && 'plugin_update_fatal_error_rollback_successful' === $ran_proof_fatal_result->get_error_code(),
+		'Core did not report the active-plugin fatal rollback; observed ' . $ran_proof_fatal_result_summary . '.'
+	);
+	ran_updater_proof_assert( '4.0.0' === $ran_proof_fatal_completion_version, 'The proof no longer characterizes upgrader_process_complete occurring before Core automatic fatal rollback.' );
+	ran_updater_proof_assert( '3.0.0' === ran_updater_proof_read_version( $ran_proof_auto_plugin_file, 'plugin' ), 'Core did not restore the plugin version after the automatic fatal check.' );
+	ran_updater_proof_assert( 'plugin-automatic-success' === file_get_contents( dirname( $ran_proof_auto_plugin_file ) . '/marker.txt' ), 'Core did not restore the plugin bytes after the automatic fatal check.' );
+	$ran_proof_auto_plugin_updater->finalizePendingInstall();
+	$ran_proof_fatal_diagnostics = $ran_proof_auto_plugin_updater->diagnostics();
+	ran_updater_proof_assert( '4.0.0' === ( $ran_proof_fatal_diagnostics['offered_version'] ?? null ), 'The updater discarded the offer before automatic rollback completed.' );
+	ran_updater_proof_assert( 'update_completed' !== ( $ran_proof_fatal_diagnostics['code'] ?? null ), 'The updater reported success after automatic rollback restored the prior plugin.' );
 }
-ran_updater_proof_finish_automatic( $ran_proof_fatal_automatic );
-$ran_proof_fatal_result_summary = is_wp_error( $ran_proof_fatal_result )
-	? implode( ',', $ran_proof_fatal_result->get_error_codes() )
-	: get_debug_type( $ran_proof_fatal_result ) . ':' . var_export( $ran_proof_fatal_result, true );
-ran_updater_proof_assert(
-	is_wp_error( $ran_proof_fatal_result ) && 'plugin_update_fatal_error_rollback_successful' === $ran_proof_fatal_result->get_error_code(),
-	'Core did not report the active-plugin fatal rollback; observed ' . $ran_proof_fatal_result_summary . '.'
-);
-ran_updater_proof_assert( '4.0.0' === $ran_proof_fatal_completion_version, 'The proof no longer characterizes upgrader_process_complete occurring before Core automatic fatal rollback.' );
-ran_updater_proof_assert( '3.0.0' === ran_updater_proof_read_version( $ran_proof_auto_plugin_file, 'plugin' ), 'Core did not restore the plugin version after the automatic fatal check.' );
-ran_updater_proof_assert( 'plugin-automatic-success' === file_get_contents( dirname( $ran_proof_auto_plugin_file ) . '/marker.txt' ), 'Core did not restore the plugin bytes after the automatic fatal check.' );
-$ran_proof_auto_plugin_updater->finalizePendingInstall();
-$ran_proof_fatal_diagnostics = $ran_proof_auto_plugin_updater->diagnostics();
-ran_updater_proof_assert( '4.0.0' === ( $ran_proof_fatal_diagnostics['offered_version'] ?? null ), 'The updater discarded the offer before automatic rollback completed.' );
-ran_updater_proof_assert( 'update_completed' !== ( $ran_proof_fatal_diagnostics['code'] ?? null ), 'The updater reported success after automatic rollback restored the prior plugin.' );
 
 $ran_proof_theme_updaters = array();
 $ran_proof_theme_clients  = array();
