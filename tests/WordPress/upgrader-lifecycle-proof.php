@@ -622,7 +622,7 @@ ran_updater_proof_assert(
 	'Core did not expose the injected destination-copy failure through upgrader_install_package_result.'
 );
 ran_updater_proof_assert( null === $ran_proof_failure_result, 'The proof no longer characterizes Theme_Upgrader::upgrade hiding the early copy failure.' );
-ran_updater_proof_assert( array() === $ran_proof_core_result, 'The proof no longer characterizes Core leaving WP_Upgrader::$result empty on an early copy failure.' );
+ran_updater_proof_assert( null === $ran_proof_core_result, 'The proof no longer characterizes Core leaving WP_Upgrader::$result null on an early copy failure.' );
 ran_updater_proof_assert( '3.0.0' === ran_updater_proof_read_version( get_theme_root() . '/' . $ran_proof_inactive_theme . '/style.css', 'theme' ), 'The injected copy failure did not expose the partially copied new header.' );
 $ran_proof_failure_updater->finalizePendingInstall();
 $ran_proof_failure_diagnostics = $ran_proof_failure_updater->diagnostics();
@@ -631,7 +631,7 @@ ran_updater_proof_assert( 'copy_failed_copy_dir' === ( $ran_proof_failure_diagno
 
 $ran_proof_state                          = get_option( 'ran_updater_lifecycle_proof_state' );
 $ran_proof_state['failure_reached']       = true;
-$ran_proof_state['copy_result_was_empty'] = array() === $ran_proof_core_result;
+$ran_proof_state['copy_result_was_empty'] = null === $ran_proof_core_result;
 update_option( 'ran_updater_lifecycle_proof_state', $ran_proof_state, false );
 
 WP_CLI::success( 'Real plugin, theme, automatic-update and rollback lifecycle operations reached the shutdown restoration boundary.' );
