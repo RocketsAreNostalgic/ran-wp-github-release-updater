@@ -40,6 +40,10 @@ final class NativePluginUpdater {
 
 	private const CACHE_SCHEMA = 8;
 
+	private const PACKAGE_HEADER_BYTES = 8192;
+
+	private const MAX_STAGED_METADATA_FILE_BYTES = 1048576;
+
 	private bool $registered = false;
 
 	private bool $noticeRendered = false;
@@ -54,6 +58,18 @@ final class NativePluginUpdater {
 
 	/** @var Offer|null */
 	private ?array $pendingOffer = null;
+
+	private ?string $pendingExpectedVersion = null;
+
+	private bool $pendingCoreHandoff = false;
+
+	private bool $pendingInstallResultCaptured = false;
+
+	private mixed $pendingInstallResult = null;
+
+	private bool $pendingCompletionObserved = false;
+
+	private bool $pendingShutdownScheduled = false;
 
 	private ReleaseCandidateSelector $candidates;
 
@@ -124,10 +140,14 @@ final class NativePluginUpdater {
 		) {
 			return self::configurationError( 'plugin_file', 'The consuming plugin file is invalid.' );
 		}
-		if ( ! is_string( $repository )
-			|| ( null !== $repositoryId && ! is_string( $repositoryId ) )
-		) {
+		if ( ! is_string( $repository ) ) {
 			return self::configurationError( 'repository', 'The GitHub repository is invalid.' );
+		}
+		if ( ! is_string( $repositoryId ) ) {
+			return self::configurationError(
+				'repository_identity',
+				'A numeric GitHub repository identity is required.'
+			);
 		}
 		$repositoryValue = Repository::fromString( $repository, $repositoryId );
 		if ( $repositoryValue instanceof \WP_Error ) {
@@ -262,6 +282,12 @@ final class NativePluginUpdater {
 			4
 		);
 		add_filter( 'upgrader_pre_install', array( $this, 'filterPreInstall' ), PHP_INT_MAX, 2 );
+		add_filter(
+			'upgrader_install_package_result',
+			array( $this, 'captureInstallPackageResult' ),
+			PHP_INT_MAX,
+			2
+		);
 		add_action( 'upgrader_process_complete', array( $this, 'observeCompletion' ), 10, 2 );
 		add_action( 'admin_notices', array( $this, 'renderAdminNotice' ) );
 		add_action( 'network_admin_notices', array( $this, 'renderAdminNotice' ) );
@@ -416,13 +442,18 @@ final class NativePluginUpdater {
 			return $reply;
 		}
 		if ( false !== $reply ) {
-			if ( $this->admitsCoreReinstallHandoff( $reply, $package, $hookExtra ) ) {
+			$handoff = $this->claimCoreReinstallHandoff( $reply, $package, $hookExtra );
+			if ( null !== $handoff ) {
 				$blocked = $this->startPendingInstall( $package );
 				if ( $blocked instanceof \WP_Error ) {
+					$handoff['claim']->discard();
 					return $blocked;
 				}
-				$this->pendingArchive = $reply;
-				$this->pendingClaim   = null;
+				$this->schedulePendingFinalization();
+				$this->pendingArchive         = $reply;
+				$this->pendingClaim           = $handoff['claim'];
+				$this->pendingExpectedVersion = $handoff['expected_version'];
+				$this->pendingCoreHandoff     = true;
 				add_filter(
 					'pre_unzip_file',
 					array( $this, 'filterPreUnzipFile' ),
@@ -452,6 +483,7 @@ final class NativePluginUpdater {
 		if ( $blocked instanceof \WP_Error ) {
 			return $blocked;
 		}
+		$this->schedulePendingFinalization();
 		if ( null === $this->pendingOperationClaim ) {
 			return $this->downloadError(
 				'github_updater_operation_fence_lost',
@@ -539,23 +571,47 @@ final class NativePluginUpdater {
 	 * artifact. This remains narrower than a general local-package exception.
 	 *
 	 * @param array<string, mixed> $hookExtra Core upgrader context.
+	 * @return array{claim: ClaimedArtifact, expected_version: string}|null
 	 */
-	private function admitsCoreReinstallHandoff( mixed $reply, string $package, array $hookExtra ): bool {
+	private function claimCoreReinstallHandoff(
+		mixed $reply,
+		string $package,
+		array $hookExtra
+	): ?array {
 		if ( ! is_string( $reply )
 			|| '' === $reply
 			|| ! hash_equals( $package, $reply )
 			|| 'update' !== ( $hookExtra['action'] ?? null ) ) {
-			return false;
+			return null;
 		}
 
-		return true === apply_filters(
+		$claim = apply_filters(
 			ReleaseCandidatePreflight::CORE_REINSTALL_HANDOFF_FILTER,
-			false,
+			null,
 			$reply,
 			$package,
 			$hookExtra,
 			$this->targetType,
 			$this->pluginBasename
+		);
+		if ( ! $claim instanceof ClaimedArtifact ) {
+			return null;
+		}
+		try {
+			$expectedVersion = $claim->acceptCoreUpdate(
+				$this->targetType,
+				$this->pluginBasename,
+				(string) $hookExtra['action'],
+				$reply
+			);
+		} catch ( \Throwable ) {
+			$claim->discard();
+			return null;
+		}
+
+		return array(
+			'claim'            => $claim,
+			'expected_version' => $expectedVersion,
 		);
 	}
 
@@ -591,7 +647,6 @@ final class NativePluginUpdater {
 			try {
 				$this->pendingClaim->assertUnchanged();
 			} catch ( \Throwable ) {
-				$this->clearPendingInstall();
 				return $this->downloadError(
 					'github_updater_artifact_identity_changed',
 					'The verified update archive changed before extraction.'
@@ -606,7 +661,6 @@ final class NativePluginUpdater {
 			|| $requiredSpace < 0
 			|| $requiredSpace > ReleasePackageIdentityValidator::MAX_EXTRACTION_SPACE
 		) {
-			$this->clearPendingInstall();
 			return $this->downloadError(
 				'github_updater_extraction_too_large',
 				'The verified update requires more than 256 MiB of extraction space.'
@@ -679,21 +733,13 @@ final class NativePluginUpdater {
 				'WordPress did not provide a valid staged update source.'
 			);
 		}
-		if ( null === $this->pendingOffer ) {
-			$blocked = $this->renewPendingInstall();
-			if ( $blocked instanceof \WP_Error ) {
-				$this->clearPendingInstall();
-				return $blocked;
-			}
-			$this->debugLog( 'core_reinstall_source_admitted' );
-			return $source;
-		}
-
 		global $wp_filesystem;
 		if ( ! is_object( $wp_filesystem )
 			|| ! is_callable( array( $wp_filesystem, 'dirlist' ) )
 			|| ! is_callable( array( $wp_filesystem, 'is_dir' ) )
 			|| ! is_callable( array( $wp_filesystem, 'is_file' ) )
+			|| ! is_callable( array( $wp_filesystem, 'size' ) )
+			|| ! is_callable( array( $wp_filesystem, 'get_contents' ) )
 		) {
 			return $this->sourceError(
 				'github_updater_filesystem_unavailable',
@@ -728,17 +774,20 @@ final class NativePluginUpdater {
 			);
 		}
 
-		$metadataFile = $this->localFilesystemPath( $mainFile, $wp_filesystem );
-		$pluginData   = self::readPackageData( $metadataFile, $this->targetType );
+		$pluginData = self::readStagedPackageData( $mainFile, $this->targetType, $wp_filesystem );
 		if ( $pluginData instanceof \WP_Error ) {
 			return $this->sourceError(
 				'github_updater_staged_identity_mismatch',
 				'The staged package metadata does not match the verified release ZIP.'
 			);
 		}
-		$stagedVersion = $pluginData['Version'] ?? null;
+		$expectedVersion = null !== $this->pendingOffer
+			? $this->pendingOffer['version']
+			: $this->pendingExpectedVersion;
+		$stagedVersion   = $pluginData['Version'] ?? null;
 		if ( ! is_string( $stagedVersion )
-			|| ! self::versionsEquivalent( $this->pendingOffer['version'], $stagedVersion )
+			|| ! is_string( $expectedVersion )
+			|| ! self::versionsEquivalent( $expectedVersion, $stagedVersion )
 		) {
 			return $this->sourceError(
 				'github_updater_release_version_mismatch',
@@ -756,7 +805,12 @@ final class NativePluginUpdater {
 				'The staged package Update URI does not match its configured GitHub repository.'
 			);
 		}
-		if ( ! $this->stagedMetadataMatches( $pluginData, $this->pendingOffer ) ) {
+		$name = $pluginData['Name'] ?? null;
+		if ( ! is_string( $name )
+			|| '' === trim( $name )
+			|| ( null !== $this->pendingOffer
+				&& ! $this->stagedMetadataMatches( $pluginData, $this->pendingOffer ) )
+		) {
 			return $this->sourceError(
 				'github_updater_staged_identity_mismatch',
 				'The staged package metadata does not match the verified release ZIP.'
@@ -808,20 +862,30 @@ final class NativePluginUpdater {
 	}
 
 	/**
-	 * Clear only this target's cached offer after a successful Core update.
+	 * Capture Core's authoritative per-target installation result.
+	 *
+	 * @param array<string, mixed> $hookExtra Core upgrader context.
+	 */
+	public function captureInstallPackageResult( mixed $result, array $hookExtra ): mixed {
+		if ( null !== $this->pendingArchive && $this->matchesHookExtra( $hookExtra ) ) {
+			$this->pendingInstallResultCaptured = true;
+			$this->pendingInstallResult         = $result;
+		}
+
+		return $result;
+	}
+
+	/**
+	 * Correlate Core's process-complete signal without treating it as success.
 	 *
 	 * @param array<string, mixed> $hookExtra Core upgrader context.
 	 */
 	public function observeCompletion( mixed $upgrader, array $hookExtra ): void {
-		remove_filter(
-			'pre_unzip_file',
-			array( $this, 'filterPreUnzipFile' ),
-			PHP_INT_MAX
-		);
-		if ( 'update' !== ( $hookExtra['action'] ?? null )
+		unset( $upgrader );
+		if ( null === $this->pendingArchive
+			|| 'update' !== ( $hookExtra['action'] ?? null )
 			|| ( $hookExtra['type'] ?? null ) !== $this->targetType
 		) {
-			$this->clearPendingInstall();
 			return;
 		}
 		$targets = 'plugin' === $this->targetType
@@ -830,55 +894,84 @@ final class NativePluginUpdater {
 		if ( ! is_array( $targets )
 			|| ! in_array( $this->pluginBasename, $targets, true )
 		) {
-			$this->clearPendingInstall();
 			return;
 		}
-		$isBulk = true === ( $hookExtra['bulk'] ?? false );
-		$result = is_object( $upgrader ) && property_exists( $upgrader, 'result' )
-			? $upgrader->result
-			: null;
-		if ( ! $isBulk && ( $result instanceof \WP_Error || false === $result ) ) {
-			$this->storeDiagnostic(
-				$result instanceof \WP_Error ? self::errorCode( $result ) : 'core_update_failed',
-				'failed'
-			);
+		$this->pendingCompletionObserved = true;
+	}
+
+	/**
+	 * Finalize only after Core's shutdown rollback and backup cleanup handlers.
+	 */
+	public function finalizePendingInstall(): void {
+		if ( null === $this->pendingArchive ) {
 			$this->clearPendingInstall();
 			return;
 		}
 
-		$state            = $this->cachedState();
-		$offer            = $this->validatedOffer( $state['offer'] ?? null );
-		$data             = self::readPackageData( $this->pluginFile, $this->targetType );
-		$installedVersion = is_array( $data ) && is_string( $data['Version'] ?? null )
-			? $data['Version']
-			: '';
-		if ( null === $offer || ! self::versionsEquivalent( $offer['version'], $installedVersion ) ) {
-			if ( $isBulk && null !== $offer ) {
-				$this->storeDiagnostic( 'bulk_update_version_mismatch', 'failed' );
+		try {
+			// Core-owned reinstall handoffs never own or mutate native release state.
+			if ( $this->pendingCoreHandoff ) {
+				return;
 			}
-			$this->clearPendingInstall();
-			return;
-		}
+			if ( $this->pendingInstallResultCaptured
+				&& ( $this->pendingInstallResult instanceof \WP_Error || false === $this->pendingInstallResult )
+			) {
+				$this->storeDiagnostic(
+					$this->pendingInstallResult instanceof \WP_Error
+						? self::errorCode( $this->pendingInstallResult )
+						: 'core_update_failed',
+					'failed'
+				);
+				return;
+			}
+			if ( ! $this->pendingInstallResultCaptured ) {
+				$this->storeDiagnostic( 'core_update_install_result_missing', 'failed' );
+				return;
+			}
+			if ( ! $this->pendingCompletionObserved ) {
+				$this->storeDiagnostic( 'core_update_completion_missing', 'failed' );
+				return;
+			}
 
-		$this->persistNativeState(
-			array(
-				'schema'     => self::CACHE_SCHEMA,
-				'status'     => 'current',
-				'checked_at' => $this->now(),
-				'diagnostic' => array(
-					'code'  => 'update_completed',
-					'state' => 'current',
-				),
-			)
-		);
-		$this->clearPendingInstall();
-		$this->debugLog( 'update_completed' );
+			$state            = $this->cachedState();
+			$offer            = $this->validatedOffer( $state['offer'] ?? null );
+			$data             = self::readPackageData( $this->pluginFile, $this->targetType );
+			$installedVersion = is_array( $data ) && is_string( $data['Version'] ?? null )
+				? $data['Version']
+				: '';
+			if ( null === $offer || ! self::versionsEquivalent( $offer['version'], $installedVersion ) ) {
+				$this->storeDiagnostic( 'core_update_final_version_mismatch', 'failed' );
+				return;
+			}
+
+			$this->persistNativeState(
+				array(
+					'schema'      => self::CACHE_SCHEMA,
+					'status'      => 'current',
+					'checked_at'  => $this->now(),
+					'current'     => $offer,
+					'conditional' => $this->conditionalToArray(
+						$this->conditionalFromState( $state )
+					),
+					'diagnostic'  => array(
+						'code'  => 'update_completed',
+						'state' => 'current',
+					),
+				)
+			);
+			$this->debugLog( 'update_completed' );
+		} finally {
+			$this->clearPendingInstall();
+		}
 	}
 
 	/**
 	 * Render a filterable, sanitized notice only on Core update surfaces.
 	 */
 	public function renderAdminNotice(): void {
+		if ( ! self::noticeSurfaceAllows( $this->targetType, $this->noticeRendered ) ) {
+			return;
+		}
 		$state  = $this->cachedState();
 		$notice = $this->defaultNotice( $state );
 		if ( null === $notice ) {
@@ -1566,7 +1659,15 @@ final class NativePluginUpdater {
 	 * @param Offer $release Current verified release.
 	 */
 	private function storeCurrent( array $release, ?ConditionalState $conditional = null ): void {
-		$state = $this->cachedState();
+		$state   = $this->cachedState();
+		$current = $this->validatedOffer( $state['current'] ?? null, false );
+		if ( null === $conditional
+			&& 'current' === ( $state['status'] ?? null )
+			&& null !== $current
+			&& $current === $release
+		) {
+			return;
+		}
 		$this->persistNativeState(
 			array(
 				'schema'      => self::CACHE_SCHEMA,
@@ -1751,7 +1852,6 @@ final class NativePluginUpdater {
 	}
 
 	private function sourceError( string $code, string $message ): \WP_Error {
-		$this->clearPendingInstall();
 		return $this->downloadError( $code, $message );
 	}
 
@@ -1833,17 +1933,51 @@ final class NativePluginUpdater {
 		return null;
 	}
 
+	private function schedulePendingFinalization(): void {
+		if ( $this->pendingShutdownScheduled ) {
+			return;
+		}
+		add_action(
+			'shutdown',
+			array( $this, 'finalizePendingInstall' ),
+			PHP_INT_MAX,
+			0
+		);
+		$this->pendingShutdownScheduled = true;
+	}
+
 	private function clearPendingInstall(): void {
-		if ( null !== $this->pendingClaim ) {
-			$this->pendingClaim->discard();
+		remove_filter(
+			'pre_unzip_file',
+			array( $this, 'filterPreUnzipFile' ),
+			PHP_INT_MAX
+		);
+		remove_action(
+			'shutdown',
+			array( $this, 'finalizePendingInstall' ),
+			PHP_INT_MAX
+		);
+		$claim          = $this->pendingClaim;
+		$operationClaim = $this->pendingOperationClaim;
+
+		$this->pendingArchive               = null;
+		$this->pendingClaim                 = null;
+		$this->pendingOffer                 = null;
+		$this->pendingExpectedVersion       = null;
+		$this->pendingCoreHandoff           = false;
+		$this->pendingInstallResultCaptured = false;
+		$this->pendingInstallResult         = null;
+		$this->pendingCompletionObserved    = false;
+		$this->pendingShutdownScheduled     = false;
+		$this->pendingOperationClaim        = null;
+
+		try {
+			$claim?->discard();
+		} finally {
+			if ( null !== $operationClaim ) {
+				$this->operations->release( $operationClaim );
+			}
 		}
-		if ( null !== $this->pendingOperationClaim ) {
-			$this->operations->release( $this->pendingOperationClaim );
-		}
-		$this->pendingArchive        = null;
-		$this->pendingClaim          = null;
-		$this->pendingOffer          = null;
-		$this->pendingOperationClaim = null;
 	}
 
 	private function normalizedPath( string $path ): string {
@@ -1852,25 +1986,6 @@ final class NativePluginUpdater {
 
 	private function withTrailingSlash( string $path ): string {
 		return $this->normalizedPath( $path ) . '/';
-	}
-
-	private function localFilesystemPath( string $path, object $filesystem ): string {
-		if ( ! defined( 'WP_CONTENT_DIR' )
-			|| ! is_callable( array( $filesystem, 'wp_content_dir' ) )
-		) {
-			return $path;
-		}
-
-		$remoteContent = $filesystem->wp_content_dir();
-		if ( ! is_string( $remoteContent ) || '' === $remoteContent ) {
-			return $path;
-		}
-
-		return str_replace(
-			$this->withTrailingSlash( $remoteContent ),
-			$this->withTrailingSlash( (string) WP_CONTENT_DIR ),
-			$path
-		);
 	}
 
 	/**
@@ -1948,28 +2063,8 @@ final class NativePluginUpdater {
 		array $context,
 		bool &$rendered
 	): void {
-		$capability = 'theme' === ( $context['type'] ?? null )
-			? 'update_themes'
-			: 'update_plugins';
-		if ( $rendered || ! current_user_can( $capability ) ) {
-			return;
-		}
-		$screen = function_exists( 'get_current_screen' ) ? get_current_screen() : null;
-		$base   = is_object( $screen ) && is_string( $screen->base ?? null )
-			? $screen->base
-			: '';
-		if ( ! in_array(
-			$base,
-			array(
-				'plugins',
-				'plugins-network',
-				'themes',
-				'themes-network',
-				'update-core',
-				'update-core-network',
-			),
-			true
-		) ) {
+		$type = 'theme' === ( $context['type'] ?? null ) ? 'theme' : 'plugin';
+		if ( ! self::noticeSurfaceAllows( $type, $rendered ) ) {
 			return;
 		}
 
@@ -2005,6 +2100,35 @@ final class NativePluginUpdater {
 			echo ' ' . esc_html( $remediation );
 		}
 		echo '</p></div>';
+	}
+
+	private static function noticeSurfaceAllows( string $targetType, bool $rendered ): bool {
+		$capability = 'theme' === $targetType
+			? 'update_themes'
+			: 'update_plugins';
+		if ( $rendered || ! current_user_can( $capability ) ) {
+			return false;
+		}
+		$screen = function_exists( 'get_current_screen' ) ? get_current_screen() : null;
+		$base   = is_object( $screen ) && is_string( $screen->base ?? null )
+			? $screen->base
+			: '';
+		if ( ! in_array(
+			$base,
+			array(
+				'plugins',
+				'plugins-network',
+				'themes',
+				'themes-network',
+				'update-core',
+				'update-core-network',
+			),
+			true
+		) ) {
+			return false;
+		}
+
+		return true;
 	}
 
 	/**
@@ -2117,7 +2241,9 @@ final class NativePluginUpdater {
 	}
 
 	private function downloadError( string $code, string $message ): \WP_Error {
-		$this->storeDiagnostic( $code, 'failed' );
+		if ( ! $this->pendingCoreHandoff ) {
+			$this->storeDiagnostic( $code, 'failed' );
+		}
 		$this->clearPendingInstall();
 		return new \WP_Error( $code, $message );
 	}
@@ -2184,17 +2310,74 @@ final class NativePluginUpdater {
 
 		return get_file_data(
 			$pluginFile,
-			array(
-				'Name'        => 'plugin' === $targetType ? 'Plugin Name' : 'Theme Name',
-				'PluginURI'   => 'plugin' === $targetType ? 'Plugin URI' : 'Theme URI',
-				'Version'     => 'Version',
-				'Description' => 'Description',
-				'Author'      => 'Author',
-				'RequiresWP'  => 'Requires at least',
-				'RequiresPHP' => 'Requires PHP',
-				'UpdateURI'   => 'Update URI',
-			),
+			self::packageHeaders( $targetType ),
 			'plugin' === $targetType ? 'plugin' : 'theme'
 		);
+	}
+
+	/** @return array<string, string> */
+	private static function packageHeaders( string $targetType ): array {
+		return array(
+			'Name'        => 'plugin' === $targetType ? 'Plugin Name' : 'Theme Name',
+			'PluginURI'   => 'plugin' === $targetType ? 'Plugin URI' : 'Theme URI',
+			'Version'     => 'Version',
+			'Description' => 'Description',
+			'Author'      => 'Author',
+			'RequiresWP'  => 'Requires at least',
+			'RequiresPHP' => 'Requires PHP',
+			'UpdateURI'   => 'Update URI',
+		);
+	}
+
+	/**
+	 * Read Core's fixed package headers through the active filesystem transport.
+	 *
+	 * @return array<string, string>|\WP_Error
+	 */
+	private static function readStagedPackageData(
+		string $pluginFile,
+		string $targetType,
+		object $filesystem
+	) {
+		$sizeReader     = array( $filesystem, 'size' );
+		$contentsReader = array( $filesystem, 'get_contents' );
+		if ( ! is_callable( $sizeReader ) || ! is_callable( $contentsReader ) ) {
+			return self::configurationError(
+				'package_metadata',
+				'The staged package metadata file cannot be read through WordPress.'
+			);
+		}
+		$size = $sizeReader( $pluginFile );
+		if ( ! is_int( $size ) || $size < 0 || $size > self::MAX_STAGED_METADATA_FILE_BYTES ) {
+			return self::configurationError(
+				'package_metadata',
+				'The staged package metadata file exceeds the supported read limit.'
+			);
+		}
+		$contents = $contentsReader( $pluginFile );
+		if ( ! is_string( $contents )
+			|| strlen( $contents ) !== $size
+		) {
+			return self::configurationError(
+				'package_metadata',
+				'The staged package metadata file could not be read safely.'
+			);
+		}
+
+		$contents = str_replace( "\r", "\n", substr( $contents, 0, self::PACKAGE_HEADER_BYTES ) );
+		$headers  = self::packageHeaders( $targetType );
+		foreach ( $headers as $field => $header ) {
+			$matched           = preg_match(
+				'/^(?:[ \t]*<\?php)?[ \t\/*#@]*' . preg_quote( $header, '/' ) . ':(.*)$/mi',
+				$contents,
+				$match
+			);
+			$value             = 1 === $matched && ! empty( $match[1] )
+				? preg_replace( '/\s*(?:\*\/|\?>).*/', '', $match[1] )
+				: '';
+			$headers[ $field ] = is_string( $value ) ? trim( $value ) : '';
+		}
+
+		return $headers;
 	}
 }

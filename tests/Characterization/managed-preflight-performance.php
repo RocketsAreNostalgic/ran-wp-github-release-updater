@@ -173,14 +173,13 @@ function managed_preflight_probe( int $identity, array $options = array() ): arr
 	$repositoryId           = (string) ( 100000 + $identity );
 	$packageRoot            = 'fixture-package-' . $identity;
 	$mainFile               = $packageRoot . '.php';
-	$incompatible           = max( 0, min( 8, (int) ( $options['incompatible'] ?? 0 ) ) );
+	$incompatible           = max( 0, min( 2, (int) ( $options['incompatible'] ?? 0 ) ) );
 	$outcome                = $options['outcome'] ?? 'success';
 	$assetBytes             = max( 0, (int) ( $options['asset_bytes'] ?? 0 ) );
 	$suspendFirstRequest    = true === ( $options['suspend_first_request'] ?? false );
 	$transport              = new ManagedPreflightProbeTransport( $suspendFirstRequest );
 	$fixtures               = array();
-	$terminalIncompatible   = 8 === $incompatible;
-	$releaseCount           = $terminalIncompatible ? 8 : $incompatible + 1;
+	$releaseCount           = $incompatible + 1;
 	$releaseRepresentations = array();
 
 	if ( '304' === $outcome ) {
@@ -430,6 +429,7 @@ function managed_preflight_probe_json( mixed $value ): string {
 }
 
 const MANAGED_PREFLIGHT_MAX_ASSET_BYTES      = 50 * 1024 * 1024;
+const MANAGED_PREFLIGHT_MAX_ZIP_CANDIDATES   = 2;
 const MANAGED_PREFLIGHT_SMALL_MEMORY_CEILING = 32 * 1024 * 1024;
 const MANAGED_PREFLIGHT_MAX_MEMORY_CEILING   = 96 * 1024 * 1024;
 const MANAGED_PREFLIGHT_CPU_CEILING_MS       = 15000.0;
@@ -462,7 +462,7 @@ function independent_target_probe(
 		}
 	);
 	$incompatible = (int) ( $options['incompatible'] ?? 0 );
-	$candidates   = 8 === $incompatible ? 8 : $incompatible + 1;
+	$candidates   = min( MANAGED_PREFLIGHT_MAX_ZIP_CANDIDATES, $incompatible + 1 );
 	$downloads    = in_array( $options['outcome'] ?? 'success', array( '304', 'rate', 'timeout' ), true )
 		? 0
 		: $targetCount * $candidates;
@@ -474,7 +474,10 @@ function independent_target_probe(
 			'logical_requests' => $logical,
 			'transport_hops'   => $hops,
 			'zip_downloads'    => $downloads,
-			'download_bytes'   => managed_preflight_fixture_bytes( $probes, $downloads > 0 ),
+			'download_bytes'   => managed_preflight_fixture_bytes(
+				$probes,
+				$downloads > 0 ? $candidates : 0
+			),
 		)
 	);
 	managed_preflight_discard( $probes );
@@ -516,7 +519,7 @@ function cached_target_probe( string $scenario, int $targetCount, bool $force ):
 			'logical_requests' => $force ? 5 * $targetCount : 0,
 			'transport_hops'   => $force ? 6 * $targetCount : 0,
 			'zip_downloads'    => $force ? $targetCount : 0,
-			'download_bytes'   => managed_preflight_fixture_bytes( $probes, $force ),
+			'download_bytes'   => managed_preflight_fixture_bytes( $probes, $force ? 1 : 0 ),
 		)
 	);
 	managed_preflight_discard( $probes );
@@ -676,7 +679,7 @@ function outcome_probe( string $outcome, string $expectedVerdict ): array {
 			'logical_requests' => $early ? 1 : ( 'bad_digest' === $outcome ? 4 : 5 ),
 			'transport_hops'   => $early ? 1 : ( 'bad_digest' === $outcome ? 5 : 6 ),
 			'zip_downloads'    => $early ? 0 : 1,
-			'download_bytes'   => managed_preflight_fixture_bytes( array( $probe ), ! $early ),
+			'download_bytes'   => managed_preflight_fixture_bytes( array( $probe ), $early ? 0 : 1 ),
 		)
 	);
 	managed_preflight_discard( array( $probe ) );
@@ -716,7 +719,7 @@ function assurance_rejection_probe(): array {
 			'logical_requests' => 5,
 			'transport_hops'   => 6,
 			'zip_downloads'    => 1,
-			'download_bytes'   => managed_preflight_fixture_bytes( array( $probe ), true ),
+			'download_bytes'   => managed_preflight_fixture_bytes( array( $probe ), 1 ),
 		)
 	);
 	managed_preflight_discard( array( $probe ) );
@@ -885,16 +888,13 @@ function managed_preflight_discard( array $probes ): void {
 /**
  * @param list<array{fixtures: list<ManagedPreflightProbeAsset>}> $probes
  */
-function managed_preflight_fixture_bytes(
-	array $probes,
-	bool $all
-): int {
-	if ( ! $all ) {
+function managed_preflight_fixture_bytes( array $probes, int $fixturesPerProbe ): int {
+	if ( 0 === $fixturesPerProbe ) {
 		return 0;
 	}
 	$bytes = 0;
 	foreach ( $probes as $probe ) {
-		foreach ( $probe['fixtures'] as $fixture ) {
+		foreach ( array_slice( $probe['fixtures'], 0, $fixturesPerProbe ) as $fixture ) {
 			$bytes += $fixture->size();
 		}
 	}
@@ -932,10 +932,10 @@ foreach ( array( 1, 5, 10, 20 ) as $targets ) {
 		'ready'
 	);
 	$results[] = independent_target_probe(
-		'eight-incompatible',
+		'two-incompatible',
 		$targets,
-		array( 'incompatible' => 8 ),
-		'github_updater_no_eligible_release'
+		array( 'incompatible' => 2 ),
+		'github_updater_release_search_budget_exhausted'
 	);
 	$results[] = failure_cooldown_probe( $targets );
 	$results[] = cached_target_probe( 'forced-refresh', $targets, true );

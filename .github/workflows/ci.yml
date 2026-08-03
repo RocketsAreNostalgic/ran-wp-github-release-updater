@@ -75,7 +75,7 @@ jobs:
           test "$(wp core version --path=build/wordpress)" = '${{ matrix.wordpress }}'
           wp config create --path=build/wordpress --dbname=wordpress_test --dbuser=root --dbpass=root --dbhost=127.0.0.1:3306
           wp core install --path=build/wordpress --url=http://localhost --title='RAN Updater Lifecycle CI' --admin_user=admin --admin_password=admin --admin_email=admin@example.com --skip-email
-      - name: Prove plugin and theme registration lifecycle
+      - name: Prove registration, upgrader, automatic-update and rollback lifecycle
         env:
           RAN_UPDATER_LIFECYCLE_TEST_DISPOSABLE: "1"
           RAN_UPDATER_WORDPRESS_PATH: ${{ github.workspace }}/build/wordpress

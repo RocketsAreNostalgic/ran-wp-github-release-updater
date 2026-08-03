@@ -477,13 +477,21 @@ final class ReleasePackageIdentityValidatorTest extends TestCase {
 	}
 
 	public function testExtractionSizeAcceptsExactLimitAndRejectsOneByteOver(): void {
+		self::assertLessThanOrEqual(
+			ReleasePackageIdentityValidator::MAX_EXTRACTION_SPACE,
+			(int) ceil( ReleasePackageIdentityValidator::MAX_EXPANDED_ARCHIVE_SIZE * 2.1 )
+		);
+		self::assertGreaterThan(
+			ReleasePackageIdentityValidator::MAX_EXTRACTION_SPACE,
+			(int) ceil( ( ReleasePackageIdentityValidator::MAX_EXPANDED_ARCHIVE_SIZE + 1 ) * 2.1 )
+		);
 		$descriptor = $this->descriptor();
 		$target     = $this->pluginTarget();
 		$header     = $this->pluginHeader();
 
 		$exact = ( new ReleasePackageIdentityValidator() )->validate(
 			$this->archiveWithDeclaredTotalSize(
-				ReleasePackageIdentityValidator::MAX_EXTRACTION_SPACE,
+				ReleasePackageIdentityValidator::MAX_EXPANDED_ARCHIVE_SIZE,
 				$header
 			),
 			$descriptor,
@@ -491,7 +499,7 @@ final class ReleasePackageIdentityValidatorTest extends TestCase {
 		);
 		$over  = ( new ReleasePackageIdentityValidator() )->validate(
 			$this->archiveWithDeclaredTotalSize(
-				ReleasePackageIdentityValidator::MAX_EXTRACTION_SPACE + 1,
+				ReleasePackageIdentityValidator::MAX_EXPANDED_ARCHIVE_SIZE + 1,
 				$header
 			),
 			$descriptor,

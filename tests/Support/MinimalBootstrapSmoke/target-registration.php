@@ -35,7 +35,8 @@ $assert = static function ( bool $condition, string $message ): void {
 $factory = require dirname( __DIR__, 3 ) . '/bootstrap.php';
 $facade  = $factory(
 	'/wordpress/wp-content/plugins/renamed-package/renamed-package.php',
-	'owner/renamed-package'
+	'owner/renamed-package',
+	'123456789'
 );
 $facade->register();
 

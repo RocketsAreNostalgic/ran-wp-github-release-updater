@@ -14,6 +14,9 @@ use RAN\WPGitHubReleaseUpdater\V1\Artifact\VerifiedArtifact;
 final class ReleasePackageIdentityValidator {
 	public const MAX_EXTRACTION_SPACE = 268435456;
 
+	/** Largest expanded ZIP that remains within Core's 2.1 working-space estimate. */
+	public const MAX_EXPANDED_ARCHIVE_SIZE = 127826407;
+
 	private const MAX_ARCHIVE_ENTRIES = 10000;
 
 	private const MAX_HEADER_BYTES = 8192;
@@ -169,7 +172,7 @@ final class ReleasePackageIdentityValidator {
 						'The release archive contains an invalid entry size.'
 					);
 				}
-				if ( $stat['size'] > self::MAX_EXTRACTION_SPACE - $extractionSize ) {
+				if ( $stat['size'] > self::MAX_EXPANDED_ARCHIVE_SIZE - $extractionSize ) {
 					return self::archiveError(
 						CandidateValidation::ARCHIVE_TOO_LARGE,
 						'The release archive exceeds the extraction limit.'

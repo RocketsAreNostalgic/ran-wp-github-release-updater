@@ -60,6 +60,7 @@ final class RuntimeTest extends TestCase {
 		$updater        = $create_updater(
 			pluginFile: $this->plugin_file,
 			repository: 'RocketsAreNostalgic/booster-fixture-plugin',
+			providerRepositoryId: '123456789',
 			pluginSlug: 'booster-fixture-plugin',
 			channel: 'stable',
 			accessToken: null,
@@ -89,6 +90,7 @@ final class RuntimeTest extends TestCase {
 		$updater        = $create_updater(
 			pluginFile: $this->plugin_file,
 			repository: 'RocketsAreNostalgic/booster-fixture-plugin',
+			providerRepositoryId: '123456789',
 			pluginSlug: 'booster-fixture-plugin',
 			nativeDiscovery: false
 		);
@@ -231,6 +233,7 @@ final class RuntimeTest extends TestCase {
 					'pluginFile'           => $theme_file,
 					'stylesheet'           => 'locally-renamed-theme',
 					'repository'           => 'RocketsAreNostalgic/booster-fixture-theme',
+					'providerRepositoryId' => '987654321',
 					'pluginSlug'           => 'booster-fixture-theme',
 					'channel'              => 'stable',
 					'accessToken'          => static function () use ( &$resolutions ): string {
@@ -381,6 +384,7 @@ final class RuntimeTest extends TestCase {
 			'registrationId'       => $registration_id,
 			'pluginFile'           => $plugin_file ?? $this->plugin_file,
 			'repository'           => 'RocketsAreNostalgic/booster-fixture-plugin',
+			'providerRepositoryId' => '123456789',
 			'pluginSlug'           => 'booster-fixture-plugin',
 			'channel'              => 'stable',
 			'accessToken'          => null,
