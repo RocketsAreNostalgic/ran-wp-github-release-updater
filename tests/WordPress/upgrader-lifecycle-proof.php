@@ -442,7 +442,7 @@ $ran_proof_automatic_result = ran_updater_proof_scrape(
 	static fn () => $ran_proof_automatic->update( 'plugin', $ran_proof_automatic_offer )
 );
 ran_updater_proof_finish_automatic( $ran_proof_automatic );
-ran_updater_proof_assert( null === $ran_proof_automatic_result, 'WP_Automatic_Updater did not complete the active-plugin update.' );
+ran_updater_proof_assert( true === $ran_proof_automatic_result, 'WP_Automatic_Updater did not complete the active-plugin update.' );
 ran_updater_proof_assert( '3.0.0' === ran_updater_proof_read_version( $ran_proof_auto_plugin_file, 'plugin' ), 'The automatic plugin update did not install the expected version.' );
 ran_updater_proof_assert( is_plugin_active( $ran_proof_auto_plugin_identifier ), 'The automatic plugin update changed activation state.' );
 $ran_proof_auto_plugin_updater->finalizePendingInstall();
