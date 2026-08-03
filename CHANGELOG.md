@@ -1,5 +1,16 @@
 # Changelog
 
+## [2.0.0-beta.1](https://github.com/RocketsAreNostalgic/ran-wp-github-release-updater/compare/v1.6.0-beta.1...v2.0.0-beta.1) (2026-08-03)
+
+
+### ⚠ BREAKING CHANGES
+
+* harden update authority and lifecycle coordination ([#3](https://github.com/RocketsAreNostalgic/ran-wp-github-release-updater/issues/3))
+
+### Features
+
+* harden update authority and lifecycle coordination ([#3](https://github.com/RocketsAreNostalgic/ran-wp-github-release-updater/issues/3)) ([66ed743](https://github.com/RocketsAreNostalgic/ran-wp-github-release-updater/commit/66ed7439ffacb433706744ff6adadadc5f2f002d))
+
 ## 1.6.0-beta.1 (2026-08-02)
 
 
