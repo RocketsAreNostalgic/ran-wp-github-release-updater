@@ -1,5 +1,21 @@
 # Changelog
 
+## [2.0.0-beta.2](https://github.com/RocketsAreNostalgic/ran-wp-github-release-updater/compare/v2.0.0-beta.1...v2.0.0-beta.2) (2026-08-03)
+
+
+### ⚠ BREAKING CHANGES
+
+* harden native updater identity and finalization
+
+### Bug Fixes
+
+* harden native updater identity and finalization ([b0d2d85](https://github.com/RocketsAreNostalgic/ran-wp-github-release-updater/commit/b0d2d85394726f94becc37b157a1376f75adc671))
+
+
+### Performance
+
+* bound native release candidate inspection ([f644a0a](https://github.com/RocketsAreNostalgic/ran-wp-github-release-updater/commit/f644a0a7b1010c8fdf6eee63c2de3338e53e28ef))
+
 ## [2.0.0-beta.1](https://github.com/RocketsAreNostalgic/ran-wp-github-release-updater/compare/v1.6.0-beta.1...v2.0.0-beta.1) (2026-08-03)
 
 
