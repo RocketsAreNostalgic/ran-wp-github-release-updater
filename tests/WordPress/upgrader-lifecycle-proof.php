@@ -491,7 +491,13 @@ try {
 	remove_action( 'upgrader_process_complete', $ran_proof_capture_fatal_completion, 1 );
 }
 ran_updater_proof_finish_automatic( $ran_proof_fatal_automatic );
-ran_updater_proof_assert( is_wp_error( $ran_proof_fatal_result ) && 'plugin_update_fatal_error_rollback_successful' === $ran_proof_fatal_result->get_error_code(), 'Core did not report the active-plugin fatal rollback.' );
+$ran_proof_fatal_result_summary = is_wp_error( $ran_proof_fatal_result )
+	? implode( ',', $ran_proof_fatal_result->get_error_codes() )
+	: get_debug_type( $ran_proof_fatal_result ) . ':' . var_export( $ran_proof_fatal_result, true );
+ran_updater_proof_assert(
+	is_wp_error( $ran_proof_fatal_result ) && 'plugin_update_fatal_error_rollback_successful' === $ran_proof_fatal_result->get_error_code(),
+	'Core did not report the active-plugin fatal rollback; observed ' . $ran_proof_fatal_result_summary . '.'
+);
 ran_updater_proof_assert( '4.0.0' === $ran_proof_fatal_completion_version, 'The proof no longer characterizes upgrader_process_complete occurring before Core automatic fatal rollback.' );
 ran_updater_proof_assert( '3.0.0' === ran_updater_proof_read_version( $ran_proof_auto_plugin_file, 'plugin' ), 'Core did not restore the plugin version after the automatic fatal check.' );
 ran_updater_proof_assert( 'plugin-automatic-success' === file_get_contents( dirname( $ran_proof_auto_plugin_file ) . '/marker.txt' ), 'Core did not restore the plugin bytes after the automatic fatal check.' );
@@ -589,7 +595,13 @@ try {
 	}
 }
 
-ran_updater_proof_assert( is_wp_error( $ran_proof_failure_result ) && 'copy_failed_copy_dir' === $ran_proof_failure_result->get_error_code(), 'Core did not return the injected destination-copy failure.' );
+$ran_proof_failure_result_summary = is_wp_error( $ran_proof_failure_result )
+	? implode( ',', $ran_proof_failure_result->get_error_codes() )
+	: get_debug_type( $ran_proof_failure_result ) . ':' . var_export( $ran_proof_failure_result, true );
+ran_updater_proof_assert(
+	is_wp_error( $ran_proof_failure_result ) && 'copy_failed_copy_dir' === $ran_proof_failure_result->get_error_code(),
+	'Core did not return the injected destination-copy failure; observed ' . $ran_proof_failure_result_summary . '.'
+);
 ran_updater_proof_assert( array() === $ran_proof_core_result, 'The proof no longer characterizes Core leaving WP_Upgrader::$result empty on an early copy failure.' );
 ran_updater_proof_assert( '3.0.0' === ran_updater_proof_read_version( get_theme_root() . '/' . $ran_proof_inactive_theme . '/style.css', 'theme' ), 'The injected copy failure did not expose the partially copied new header.' );
 $ran_proof_failure_updater->finalizePendingInstall();
