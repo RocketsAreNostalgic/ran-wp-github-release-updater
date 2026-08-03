@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.0.0-beta.3](https://github.com/RocketsAreNostalgic/ran-wp-github-release-updater/compare/v2.0.0-beta.2...v2.0.0-beta.3) (2026-08-03)
+
+
+### Bug Fixes
+
+* preserve automatic update continuity ([e923eae](https://github.com/RocketsAreNostalgic/ran-wp-github-release-updater/commit/e923eae6d54833dd1b72c38b339e8f2d51aa8877))
+* preserve automatic update continuity ([3281663](https://github.com/RocketsAreNostalgic/ran-wp-github-release-updater/commit/328166347037f13dfeb731040e7d66c89aae940a))
+
 ## [2.0.0-beta.2](https://github.com/RocketsAreNostalgic/ran-wp-github-release-updater/compare/v2.0.0-beta.1...v2.0.0-beta.2) (2026-08-03)
 
 

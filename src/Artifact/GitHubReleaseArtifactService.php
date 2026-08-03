@@ -793,7 +793,7 @@ final class GitHubReleaseArtifactService {
 		return array(
 			'Accept'               => 'application/vnd.github+json',
 			'X-GitHub-Api-Version' => '2022-11-28',
-			'User-Agent'           => 'ran-wp-github-release-updater/2.0.0-beta.2', // x-release-please-version
+			'User-Agent'           => 'ran-wp-github-release-updater/2.0.0-beta.3', // x-release-please-version
 		);
 	}
 
