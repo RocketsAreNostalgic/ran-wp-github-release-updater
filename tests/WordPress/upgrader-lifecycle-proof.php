@@ -116,6 +116,15 @@ final class RanUpdaterLifecycleFailingFilesystem extends WP_Filesystem_Direct {
 
 		return parent::copy( $source, $destination, $overwrite, $mode );
 	}
+
+	public function chmod( $file, $mode = false, $recursive = false ) {
+		$file = rtrim( str_replace( '\\', '/', (string) $file ), '/' );
+		if ( str_ends_with( $file, '/themes/' . $this->theme_slug . '/zz-copy-failure.php' ) ) {
+			return true;
+		}
+
+		return parent::chmod( $file, $mode, $recursive );
+	}
 }
 
 function ran_updater_proof_assert( bool $condition, string $message ): void {
@@ -573,10 +582,18 @@ $ran_proof_state['pre_failure_digest'] = ran_updater_proof_directory_digest( get
 update_option( 'ran_updater_lifecycle_proof_state', $ran_proof_state, false );
 
 $ran_proof_core_result = null;
+$ran_proof_install_package_result = null;
 $ran_proof_completion = static function ( object $upgrader, array $extra ) use ( &$ran_proof_core_result, $ran_proof_inactive_theme ): void {
 	if ( $ran_proof_inactive_theme === ( $extra['theme'] ?? null ) ) {
 		$ran_proof_core_result = $upgrader->result;
 	}
+};
+$ran_proof_capture_install_package_result = static function ( mixed $result, array $extra ) use ( &$ran_proof_install_package_result, $ran_proof_inactive_theme ): mixed {
+	if ( $ran_proof_inactive_theme === ( $extra['theme'] ?? null ) ) {
+		$ran_proof_install_package_result = $result;
+	}
+
+	return $result;
 };
 $ran_proof_filesystem = null;
 $ran_proof_arm_failure = static function ( mixed $response, array $extra ) use ( &$ran_proof_filesystem, $ran_proof_inactive_theme ): mixed {
@@ -587,30 +604,30 @@ $ran_proof_arm_failure = static function ( mixed $response, array $extra ) use (
 	return $response;
 };
 add_action( 'upgrader_process_complete', $ran_proof_completion, 1, 2 );
+add_filter( 'upgrader_install_package_result', $ran_proof_capture_install_package_result, PHP_INT_MAX - 1, 2 );
 add_filter( 'upgrader_pre_install', $ran_proof_arm_failure, PHP_INT_MAX - 1, 2 );
 try {
 	$ran_proof_failure_result = ( new Theme_Upgrader( new Automatic_Upgrader_Skin() ) )->upgrade( $ran_proof_inactive_theme );
 } finally {
 	remove_action( 'upgrader_process_complete', $ran_proof_completion, 1 );
+	remove_filter( 'upgrader_install_package_result', $ran_proof_capture_install_package_result, PHP_INT_MAX - 1 );
 	remove_filter( 'upgrader_pre_install', $ran_proof_arm_failure, PHP_INT_MAX - 1 );
 	if ( is_object( $ran_proof_filesystem ) ) {
 		$GLOBALS['wp_filesystem'] = $ran_proof_filesystem;
 	}
 }
 
-$ran_proof_failure_result_summary = is_wp_error( $ran_proof_failure_result )
-	? implode( ',', $ran_proof_failure_result->get_error_codes() )
-	: get_debug_type( $ran_proof_failure_result ) . ':' . var_export( $ran_proof_failure_result, true );
 ran_updater_proof_assert(
-	is_wp_error( $ran_proof_failure_result ) && 'copy_failed_copy_dir' === $ran_proof_failure_result->get_error_code(),
-	'Core did not return the injected destination-copy failure; observed ' . $ran_proof_failure_result_summary . '.'
+	is_wp_error( $ran_proof_install_package_result ) && 'copy_failed_copy_dir' === $ran_proof_install_package_result->get_error_code(),
+	'Core did not expose the injected destination-copy failure through upgrader_install_package_result.'
 );
+ran_updater_proof_assert( null === $ran_proof_failure_result, 'The proof no longer characterizes Theme_Upgrader::upgrade hiding the early copy failure.' );
 ran_updater_proof_assert( array() === $ran_proof_core_result, 'The proof no longer characterizes Core leaving WP_Upgrader::$result empty on an early copy failure.' );
 ran_updater_proof_assert( '3.0.0' === ran_updater_proof_read_version( get_theme_root() . '/' . $ran_proof_inactive_theme . '/style.css', 'theme' ), 'The injected copy failure did not expose the partially copied new header.' );
 $ran_proof_failure_updater->finalizePendingInstall();
 $ran_proof_failure_diagnostics = $ran_proof_failure_updater->diagnostics();
 ran_updater_proof_assert( '3.0.0' === ( $ran_proof_failure_diagnostics['offered_version'] ?? null ), 'The updater discarded the offer before Core restored the failed theme update.' );
-ran_updater_proof_assert( 'update_completed' !== ( $ran_proof_failure_diagnostics['code'] ?? null ), 'The updater reported success for an early Core copy failure.' );
+ran_updater_proof_assert( 'copy_failed_copy_dir' === ( $ran_proof_failure_diagnostics['code'] ?? null ), 'The updater did not retain Core\'s exact early-copy failure.' );
 
 $ran_proof_state                          = get_option( 'ran_updater_lifecycle_proof_state' );
 $ran_proof_state['failure_reached']       = true;
