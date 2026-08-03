@@ -16,6 +16,7 @@ use RAN\WPGitHubReleaseUpdater\V1\Artifact\ReleaseVersion;
  * @internal
  */
 final class ReleaseCandidateSelector {
+	private const MAX_ZIP_BACKED_CANDIDATES = 2;
 
 	public function __construct( private ReleaseArtifactClient $artifacts ) {
 	}
@@ -33,6 +34,7 @@ final class ReleaseCandidateSelector {
 		?string $installedVersion = null,
 		?callable $checkpoint = null
 	) {
+		$inspected = 0;
 		foreach ( $releaseList->releases() as $release ) {
 			$blocked = $this->checkpoint( $checkpoint );
 			if ( $blocked instanceof \WP_Error ) {
@@ -63,12 +65,19 @@ final class ReleaseCandidateSelector {
 					'validation' => null,
 				);
 			}
+			if ( self::MAX_ZIP_BACKED_CANDIDATES === $inspected ) {
+				return self::searchBudgetExhausted();
+			}
+			++$inspected;
 
 			$validation = $this->validate( $descriptor, $target, $assurance, $checkpoint );
 			if ( $validation instanceof \WP_Error ) {
 				return $validation;
 			}
 			if ( CandidateValidation::RELEASE_INCOMPATIBLE === $validation->code() ) {
+				if ( self::MAX_ZIP_BACKED_CANDIDATES === $inspected ) {
+					return self::searchBudgetExhausted();
+				}
 				continue;
 			}
 
@@ -79,10 +88,7 @@ final class ReleaseCandidateSelector {
 		}
 
 		return $releaseList->isSearchExhausted()
-			? new \WP_Error(
-				'github_updater_release_search_budget_exhausted',
-				'The bounded release search did not find a compatible candidate.'
-			)
+			? self::searchBudgetExhausted()
 			: null;
 	}
 
@@ -139,5 +145,12 @@ final class ReleaseCandidateSelector {
 		}
 		$result = $checkpoint();
 		return $result instanceof \WP_Error ? $result : null;
+	}
+
+	private static function searchBudgetExhausted(): \WP_Error {
+		return new \WP_Error(
+			'github_updater_release_search_budget_exhausted',
+			'The bounded release search did not find a compatible candidate.'
+		);
 	}
 }
