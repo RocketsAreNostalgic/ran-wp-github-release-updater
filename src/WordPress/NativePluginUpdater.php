@@ -1184,6 +1184,7 @@ final class NativePluginUpdater {
 		$state                      = $this->nativeStateFromClaim( $claim );
 		$offer                      = $this->validatedOffer( $state['offer'] ?? null );
 		$current                    = $this->validatedOffer( $state['current'] ?? null, false );
+		$verifiedCurrent            = $this->validatedOffer( $state['current'] ?? null );
 
 		try {
 			$conditional = $this->conditionalFromState( $state );
@@ -1223,7 +1224,7 @@ final class NativePluginUpdater {
 					return null;
 				}
 				if ( $descriptor instanceof \WP_Error
-				|| ! $this->descriptorMatchesOffer( $descriptor, $reusable )
+					|| ! $this->descriptorMatchesOffer( $descriptor, $reusable )
 				) {
 					$code = $descriptor instanceof \WP_Error
 					? self::errorCode( $descriptor )
@@ -1235,10 +1236,20 @@ final class NativePluginUpdater {
 					}
 					return null;
 				}
+				$validation = $this->reusableCurrentValidation(
+					$descriptor,
+					$installedVersion,
+					$this->validatedOffer( $reusable )
+				);
+				if ( $validation instanceof \WP_Error ) {
+					$this->storeRemoteError( $validation, new ConditionalState(), $state );
+					return null;
+				}
 				return $this->acceptDescriptor(
 					$descriptor,
 					$this->mergedConditional( $list->conditional(), $conditional ),
-					$installedVersion
+					$installedVersion,
+					$validation
 				);
 			}
 
@@ -1264,11 +1275,24 @@ final class NativePluginUpdater {
 				return null;
 			}
 
+			$validation = $selected['validation'];
+			if ( null === $validation ) {
+				$validation = $this->reusableCurrentValidation(
+					$selected['descriptor'],
+					$installedVersion,
+					$offer ?? $verifiedCurrent
+				);
+				if ( $validation instanceof \WP_Error ) {
+					$this->storeRemoteError( $validation, $list->conditional(), $state );
+					return null;
+				}
+			}
+
 			return $this->acceptDescriptor(
 				$selected['descriptor'],
 				$list->conditional(),
 				$installedVersion,
-				$selected['validation']
+				$validation
 			);
 		} finally {
 			if ( null !== $this->activeDiscoveryClaim ) {
@@ -1296,9 +1320,28 @@ final class NativePluginUpdater {
 				$installedVersion
 			)
 		) {
+			if ( null !== $validation && ! $validation->isReady() ) {
+				$this->storeCandidateRejected( $candidate, $validation, $conditional );
+				return null;
+			}
+			$automaticRejection = $this->assurance->automaticEligibility( $descriptor );
+			if ( $automaticRejection instanceof \WP_Error ) {
+				if ( 'automatic' === $this->autoUpdatePolicy ) {
+					$this->storeRemoteError( $automaticRejection, $conditional, $this->cachedState() );
+					return null;
+				}
+			} else {
+				$candidate['automatic_profile'] = ReleaseAssurance::AUTOMATIC_PROFILE_REVISION;
+			}
+			if ( null !== $validation ) {
+				$candidate['requires']             = $validation->requiresWordPress();
+				$candidate['requires_php']         = $validation->requiresPhp();
+				$candidate['candidate_validation'] = $validation->toArray();
+			}
 			$this->storeCurrent( $candidate, $conditional );
 			return null;
 		}
+
 		$validation ??= $this->validateCandidate( $descriptor );
 		if ( $validation instanceof \WP_Error ) {
 			$this->storeRemoteError( $validation, $conditional, $this->cachedState() );
@@ -1327,6 +1370,37 @@ final class NativePluginUpdater {
 		}
 		$this->debugLog( 'release_selected', array( 'version' => $offer['version'] ) );
 		return $offer;
+	}
+
+	/**
+	 * Reuse archive-backed validation only for the same verified current release.
+	 * Custom assurance remains request-fresh and therefore revalidates the ZIP.
+	 *
+	 * @param Offer|null $verifiedRelease
+	 * @return CandidateValidation|\WP_Error|null
+	 */
+	private function reusableCurrentValidation(
+		ArtifactDescriptor $descriptor,
+		?string $installedVersion,
+		?array $verifiedRelease
+	) {
+		if ( null === $installedVersion
+			|| ReleaseVersion::RELATIONSHIP_NEWER === ReleaseVersion::relationship(
+				$descriptor->version(),
+				$installedVersion
+			)
+			|| null === $verifiedRelease
+			|| ! $this->descriptorMatchesOffer( $descriptor, $verifiedRelease )
+		) {
+			return null;
+		}
+		if ( null === $this->assurance->cacheRevision() ) {
+			return $this->validateCandidate( $descriptor );
+		}
+
+		return $this->validatedCandidateValidation(
+			$verifiedRelease['candidate_validation'] ?? null
+		);
 	}
 
 	/**
@@ -1406,6 +1480,11 @@ final class NativePluginUpdater {
 	 * @param Offer $offer
 	 */
 	private function descriptorMatchesOffer( ArtifactDescriptor $descriptor, array $offer ): bool {
+		if ( ReleaseQuery::STABLE === $this->channel
+			&& ( $descriptor->isPrerelease() || ReleaseVersion::isPrerelease( $descriptor->version() ) )
+		) {
+			return false;
+		}
 		$current = $this->offerFromDescriptor( $descriptor );
 		foreach (
 			array(

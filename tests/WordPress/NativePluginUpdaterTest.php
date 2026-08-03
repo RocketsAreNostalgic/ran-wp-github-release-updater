@@ -1113,6 +1113,148 @@ final class NativePluginUpdaterTest extends TestCase {
 		self::assertSame( 'github_updater_release_changed', $updater->diagnostics()['code'] );
 	}
 
+	public function testNotModifiedPurgesAutomaticCurrentWhenExactReleaseMoved(): void {
+		$client  = new FakeReleaseArtifactClient( $this->descriptor() );
+		$updater = $this->updater( $client, 'automatic' );
+		self::assertIsArray(
+			$updater->filterUpdate(
+				false,
+				array( 'Version' => '1.0.0' ),
+				self::PLUGIN_BASENAME,
+				array()
+			)
+		);
+		self::assertFalse(
+			$updater->filterUpdate(
+				false,
+				array( 'Version' => '1.2.3' ),
+				self::PLUGIN_BASENAME,
+				array()
+			)
+		);
+		self::assertSame( CandidateValidation::READY, $this->nativeState( $updater )['current']['candidate_validation']['state'] );
+
+		$this->now                = 22_601;
+		$client->nextListResult   = new ReleaseListResult(
+			array(),
+			new ConditionalState(),
+			new RateLimit(),
+			true
+		);
+		$client->descriptions[42] = $this->descriptor( false, '1.2.3', 'example-plugin', 42, '123456789', false );
+		self::assertFalse(
+			$updater->filterUpdate(
+				false,
+				array( 'Version' => '1.2.3' ),
+				self::PLUGIN_BASENAME,
+				array()
+			)
+		);
+
+		self::assertSame( 'github_updater_release_changed', $updater->diagnostics()['code'] );
+		self::assertArrayNotHasKey( 'current', $this->nativeState( $updater ) );
+		self::assertSame( 1, $client->acquireCalls );
+	}
+
+	public function testStableNotModifiedRejectsAnExactReleaseThatBecamePrerelease(): void {
+		$descriptor = $this->descriptor();
+		$client     = new FakeReleaseArtifactClient( $descriptor );
+		$updater    = $this->updater( $client, 'automatic' );
+		self::assertIsArray(
+			$updater->filterUpdate(
+				false,
+				array( 'Version' => '1.0.0' ),
+				self::PLUGIN_BASENAME,
+				array()
+			)
+		);
+		self::assertFalse(
+			$updater->filterUpdate(
+				false,
+				array( 'Version' => '1.2.3' ),
+				self::PLUGIN_BASENAME,
+				array()
+			)
+		);
+
+		$this->now                = 22_601;
+		$client->nextListResult   = new ReleaseListResult(
+			array(),
+			new ConditionalState(),
+			new RateLimit(),
+			true
+		);
+		$client->descriptions[42] = $this->withPrereleaseFlag( $descriptor );
+		self::assertFalse(
+			$updater->filterUpdate(
+				false,
+				array( 'Version' => '1.2.3' ),
+				self::PLUGIN_BASENAME,
+				array()
+			)
+		);
+
+		self::assertSame( 'github_updater_release_changed', $updater->diagnostics()['code'] );
+		self::assertArrayNotHasKey( 'current', $this->nativeState( $updater ) );
+		self::assertSame( 1, $client->acquireCalls );
+	}
+
+	public function testNotModifiedRechecksRequestFreshAssuranceForAutomaticCurrent(): void {
+		$checks    = 0;
+		$assurance = new ReleaseAssurance();
+		self::assertTrue(
+			$assurance->register(
+				static function () use ( &$checks ): ?\WP_Error {
+					++$checks;
+					return 1 === $checks
+						? null
+						: new \WP_Error( 'fixture_fresh_assurance_rejected', 'Rejected.' );
+				}
+			)
+		);
+		$assurance->seal();
+
+		$client  = new FakeReleaseArtifactClient( $this->descriptor() );
+		$updater = $this->updater( $client, 'automatic', assurance: $assurance );
+		self::assertIsArray(
+			$updater->filterUpdate(
+				false,
+				array( 'Version' => '1.0.0' ),
+				self::PLUGIN_BASENAME,
+				array()
+			)
+		);
+		self::assertFalse(
+			$updater->filterUpdate(
+				false,
+				array( 'Version' => '1.2.3' ),
+				self::PLUGIN_BASENAME,
+				array()
+			)
+		);
+		self::assertSame( 1, $checks );
+
+		$this->now              = 22_601;
+		$client->nextListResult = new ReleaseListResult(
+			array(),
+			new ConditionalState(),
+			new RateLimit(),
+			true
+		);
+		self::assertFalse(
+			$updater->filterUpdate(
+				false,
+				array( 'Version' => '1.2.3' ),
+				self::PLUGIN_BASENAME,
+				array()
+			)
+		);
+
+		self::assertSame( 'fixture_fresh_assurance_rejected', $updater->diagnostics()['code'] );
+		self::assertSame( 2, $checks );
+		self::assertSame( 2, $client->acquireCalls );
+	}
+
 	public function testAuthorizedForceCheckBypassesFreshCacheButNotActiveCooldown(): void {
 		$client  = new FakeReleaseArtifactClient( $this->descriptor() );
 		$updater = $this->updater( $client );
@@ -2153,7 +2295,7 @@ final class NativePluginUpdaterTest extends TestCase {
 
 	public function testCompletionClearsOfferAndDiagnosticsStayPassive(): void {
 		$client  = new FakeReleaseArtifactClient( $this->descriptor() );
-		$updater = $this->updater( $client );
+		$updater = $this->updater( $client, 'automatic' );
 		$updater->register();
 		$update = $updater->filterUpdate(
 			false,
@@ -2194,27 +2336,37 @@ final class NativePluginUpdaterTest extends TestCase {
 		self::assertNull( $after['offered_version'] );
 		self::assertSame( 'update_completed', $after['code'] );
 		self::assertSame( 1, $client->listCalls );
-		self::assertSame( '1.2.3', $this->nativeState( $updater )['current']['version'] );
+		$current = $this->nativeState( $updater )['current'];
+		self::assertSame( '1.2.3', $current['version'] );
+		self::assertSame( ReleaseAssurance::AUTOMATIC_PROFILE_REVISION, $current['automatic_profile'] );
+		self::assertSame( CandidateValidation::READY, $current['candidate_validation']['state'] );
 		self::assertFileDoesNotExist( $path );
 		self::assertSame( 0, WordPressState::hookCount( 'shutdown' ) );
 		$this->assertInstallFenceReleased( $updater );
 
-		$this->now              = 22_601;
-		$client->nextListResult = new ReleaseListResult(
-			array(),
-			new ConditionalState(),
-			new RateLimit(),
-			true
-		);
-		self::assertFalse(
-			$updater->filterUpdate(
-				false,
-				array( 'Version' => '1.2.3' ),
-				self::PLUGIN_BASENAME,
-				array()
-			)
-		);
-		self::assertSame( 2, $client->listCalls );
+		foreach ( array( 22_601, 44_202 ) as $now ) {
+			$this->now              = $now;
+			$client->nextListResult = new ReleaseListResult(
+				array(),
+				new ConditionalState(),
+				new RateLimit(),
+				true
+			);
+			self::assertFalse(
+				$updater->filterUpdate(
+					false,
+					array( 'Version' => '1.2.3' ),
+					self::PLUGIN_BASENAME,
+					array()
+				)
+			);
+			$current = $this->nativeState( $updater )['current'];
+			self::assertSame( '1.2.3', $current['version'] );
+			self::assertSame( ReleaseAssurance::AUTOMATIC_PROFILE_REVISION, $current['automatic_profile'] );
+			self::assertSame( CandidateValidation::READY, $current['candidate_validation']['state'] );
+			self::assertSame( 'up_to_date', $updater->diagnostics()['code'] );
+		}
+		self::assertSame( 3, $client->listCalls );
 		self::assertSame( 2, $client->acquireCalls );
 		self::assertSame(
 			array(
@@ -2223,7 +2375,77 @@ final class NativePluginUpdaterTest extends TestCase {
 			),
 			$client->lastListQuery?->conditional()->requestHeaders()
 		);
-		self::assertSame( '1.2.3', $this->nativeState( $updater )['current']['version'] );
+	}
+
+	public function testAutomaticThemeCompletionSurvivesRepeatedNotModifiedRevalidation(): void {
+		$target                     = $this->themeTarget();
+		$target['autoUpdatePolicy'] = 'automatic';
+		WordPressState::$pluginData[ $target['pluginFile'] ] = array(
+			'Name'        => 'Example Theme',
+			'Version'     => '1.0.0',
+			'RequiresWP'  => '6.5',
+			'RequiresPHP' => '8.2',
+			'UpdateURI'   => 'https://github.com/RocketsAreNostalgic/example-theme',
+		);
+		$client                 = new FakeReleaseArtifactClient( $this->themeDescriptor() );
+		$client->archiveEntries = array(
+			'example-theme/style.css' => "/*\nTheme Name: Example Theme\nVersion: 1.2.3\nUpdate URI: https://github.com/RocketsAreNostalgic/example-theme\nRequires PHP: 8.2\nRequires at least: 6.5\n*/",
+		);
+		$updater                = NativePluginUpdater::fromTarget(
+			$target,
+			$client,
+			fn (): int => $this->now
+		);
+		self::assertInstanceOf( NativePluginUpdater::class, $updater );
+		$update = $updater->filterUpdate(
+			false,
+			array( 'Version' => '1.0.0' ),
+			'locally-renamed-theme',
+			array()
+		);
+		self::assertIsArray( $update );
+		$path = $this->beginPendingInstall( $updater, $update, array( 'theme' => 'locally-renamed-theme' ) );
+
+		WordPressState::$pluginData[ $target['pluginFile'] ]['Version'] = '1.2.3';
+		$hookExtra = array(
+			'action' => 'update',
+			'type'   => 'theme',
+			'theme'  => 'locally-renamed-theme',
+		);
+		$updater->captureInstallPackageResult(
+			array( 'destination_name' => 'locally-renamed-theme' ),
+			$hookExtra
+		);
+		$updater->observeCompletion( null, $hookExtra );
+		$updater->finalizePendingInstall();
+
+		foreach ( array( 22_601, 44_202 ) as $now ) {
+			$this->now              = $now;
+			$client->nextListResult = new ReleaseListResult(
+				array(),
+				new ConditionalState(),
+				new RateLimit(),
+				true
+			);
+			self::assertFalse(
+				$updater->filterUpdate(
+					false,
+					array( 'Version' => '1.2.3' ),
+					'locally-renamed-theme',
+					array()
+				)
+			);
+			$current = $this->nativeState( $updater )['current'];
+			self::assertSame( ReleaseAssurance::AUTOMATIC_PROFILE_REVISION, $current['automatic_profile'] );
+			self::assertSame( CandidateValidation::READY, $current['candidate_validation']['state'] );
+			self::assertSame( 'up_to_date', $updater->diagnostics()['code'] );
+		}
+
+		self::assertSame( 3, $client->listCalls );
+		self::assertSame( 4, $client->describeCalls );
+		self::assertSame( 2, $client->acquireCalls );
+		self::assertFileDoesNotExist( $path );
+		$this->assertInstallFenceReleased( $updater );
 	}
 
 	public function testEarlyCopyFailureRetainsOfferAndExactInstallResultDiagnostic(): void {
@@ -3158,6 +3380,21 @@ final class NativePluginUpdaterTest extends TestCase {
 				str_repeat( 'b', 64 )
 			),
 			true
+		);
+	}
+
+	private function withPrereleaseFlag( ArtifactDescriptor $descriptor ): ArtifactDescriptor {
+		return new ArtifactDescriptor(
+			$descriptor->query(),
+			$descriptor->repository(),
+			$descriptor->releaseId(),
+			$descriptor->tag(),
+			$descriptor->version(),
+			$descriptor->commit(),
+			true,
+			$descriptor->detailsUrl(),
+			$descriptor->zipAsset(),
+			$descriptor->isImmutable()
 		);
 	}
 }
