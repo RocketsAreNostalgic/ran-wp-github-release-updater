@@ -65,6 +65,24 @@ $ran_coord_operation = ran_coord_env( 'RAN_COORD_OPERATION' );
 $ran_coord_name      = 'ran_wp_gh_op_v1_' . substr( hash( 'sha256', $ran_coord_target ), 0, 32 );
 $ran_coord           = new ReleaseOperationCoordinator();
 
+if ( 'configured-install' === $ran_coord_action ) {
+	$ran_coord_ttl   = $ran_coord->installLeaseSeconds();
+	$ran_coord_claim = $ran_coord->acquire( $ran_coord_target, $ran_coord_operation, $ran_coord_ttl );
+	if ( ! $ran_coord_claim instanceof ReleaseOperationClaim ) {
+		throw new RuntimeException( 'The configured-install worker did not acquire its claim.' );
+	}
+	ran_coord_result(
+		array(
+			'kind'       => 'configured-install',
+			'ttl'        => $ran_coord_ttl,
+			'lifetime'   => $ran_coord_claim->expiresAt() - $ran_coord_claim->acquiredAt(),
+			'generation' => $ran_coord_claim->generation(),
+			'released'   => $ran_coord->release( $ran_coord_claim ),
+		)
+	);
+	return;
+}
+
 if ( 'rapid-renew' === $ran_coord_action ) {
 	$ran_coord_claim = $ran_coord->acquire( $ran_coord_target, $ran_coord_operation, 300 );
 	if ( ! $ran_coord_claim instanceof ReleaseOperationClaim ) {

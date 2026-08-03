@@ -125,6 +125,28 @@ assert_result_count 1 '"first_advanced":true' "$work/rapid-renew.out"
 assert_result_count 1 '"second_advanced":true' "$work/rapid-renew.out"
 assert_result_count 1 '"released":true' "$work/rapid-renew.out"
 
+# The default and environment-selected install leases must be resolved before
+# acquisition and stored as exact database time, without adding another lock.
+env -u RAN_WP_GITHUB_RELEASE_UPDATER_INSTALL_LEASE_SECONDS \
+RAN_COORD_ACTION=configured-install \
+RAN_COORD_TARGET='real-mysql-default-install-lease' \
+RAN_COORD_OPERATION=native-install \
+	"$php_bin" "$wp_cli" eval-file "$worker" --path="$wordpress" --url="$main_url" >"$work/default-install.out"
+assert_result_count 1 '"kind":"configured-install"' "$work/default-install.out"
+assert_result_count 1 '"ttl":3600' "$work/default-install.out"
+assert_result_count 1 '"lifetime":3600' "$work/default-install.out"
+assert_result_count 1 '"released":true' "$work/default-install.out"
+
+RAN_WP_GITHUB_RELEASE_UPDATER_INSTALL_LEASE_SECONDS=7200 \
+RAN_COORD_ACTION=configured-install \
+RAN_COORD_TARGET='real-mysql-configured-install-lease' \
+RAN_COORD_OPERATION=native-install \
+	"$php_bin" "$wp_cli" eval-file "$worker" --path="$wordpress" --url="$main_url" >"$work/configured-install.out"
+assert_result_count 1 '"kind":"configured-install"' "$work/configured-install.out"
+assert_result_count 1 '"ttl":7200' "$work/configured-install.out"
+assert_result_count 1 '"lifetime":7200' "$work/configured-install.out"
+assert_result_count 1 '"released":true' "$work/configured-install.out"
+
 # Two independent processes, entering from different blogs, race the absent
 # stable target row. MySQL must admit exactly one INSERT/CAS winner.
 cold_target='real-mysql-cold-target'

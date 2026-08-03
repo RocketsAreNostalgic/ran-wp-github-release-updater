@@ -40,8 +40,6 @@ final class NativePluginUpdater {
 
 	private const CACHE_SCHEMA = 8;
 
-	private const OPERATION_TTL = 600;
-
 	private bool $registered = false;
 
 	private bool $noticeRendered = false;
@@ -1017,7 +1015,7 @@ final class NativePluginUpdater {
 		$claim        = $this->operations->acquire(
 			$this->coordinationTargetKey(),
 			'native_state:refresh',
-			self::OPERATION_TTL
+			$this->operations->discoveryLeaseSeconds()
 		);
 		$stateCleared = $claim instanceof ReleaseOperationClaim
 			&& true === $this->operations->publish(
@@ -1083,7 +1081,7 @@ final class NativePluginUpdater {
 		$claim = $this->operations->acquire(
 			$this->coordinationTargetKey(),
 			'native_discovery:' . $this->cacheKey(),
-			self::OPERATION_TTL
+			$this->operations->discoveryLeaseSeconds()
 		);
 		if ( $claim instanceof \WP_Error ) {
 			$this->debugLog( 'operation_busy' );
@@ -1479,7 +1477,7 @@ final class NativePluginUpdater {
 			$acquired = $this->operations->acquire(
 				$this->coordinationTargetKey(),
 				'native_state:diagnostic',
-				self::OPERATION_TTL
+				$this->operations->discoveryLeaseSeconds()
 			);
 			if ( $acquired instanceof \WP_Error ) {
 				return false;
@@ -1787,7 +1785,10 @@ final class NativePluginUpdater {
 				'The release-discovery ownership fence was lost.'
 			);
 		}
-		$renewed = $this->operations->renew( $this->activeDiscoveryClaim, self::OPERATION_TTL );
+		$renewed = $this->operations->renew(
+			$this->activeDiscoveryClaim,
+			$this->operations->discoveryLeaseSeconds()
+		);
 		if ( $renewed instanceof \WP_Error ) {
 			return $renewed;
 		}
@@ -1805,7 +1806,7 @@ final class NativePluginUpdater {
 		$claim = $this->operations->acquire(
 			$this->coordinationTargetKey(),
 			'native_install:' . substr( hash( 'sha256', $package ), 0, 40 ),
-			self::OPERATION_TTL
+			$this->operations->installLeaseSeconds()
 		);
 		if ( $claim instanceof \WP_Error ) {
 			return $claim;
@@ -1821,7 +1822,10 @@ final class NativePluginUpdater {
 				'The updater installation fence is unavailable.'
 			);
 		}
-		$renewed = $this->operations->renew( $this->pendingOperationClaim, self::OPERATION_TTL );
+		$renewed = $this->operations->renew(
+			$this->pendingOperationClaim,
+			$this->operations->installLeaseSeconds()
+		);
 		if ( $renewed instanceof \WP_Error ) {
 			return $renewed;
 		}

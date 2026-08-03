@@ -46,6 +46,8 @@ spl_autoload_register(
 final class NativePluginUpdaterTest extends TestCase {
 
 	private const PLUGIN_BASENAME = 'example-plugin/example-plugin.php';
+	private const DISCOVERY_LEASE = 'RAN_WP_GITHUB_RELEASE_UPDATER_DISCOVERY_LEASE_SECONDS';
+	private const INSTALL_LEASE   = 'RAN_WP_GITHUB_RELEASE_UPDATER_INSTALL_LEASE_SECONDS';
 
 	private string $pluginFile;
 	private int $now = 1000;
@@ -53,6 +55,8 @@ final class NativePluginUpdaterTest extends TestCase {
 	protected function setUp(): void {
 		parent::setUp();
 		WordPressState::reset();
+		putenv( self::DISCOVERY_LEASE );
+		putenv( self::INSTALL_LEASE );
 		$GLOBALS['wp_version'] = '6.5';
 		$this->now             = 1000;
 		$this->pluginFile      = dirname( __DIR__, 2 )
@@ -68,6 +72,12 @@ final class NativePluginUpdaterTest extends TestCase {
 			'RequiresPHP' => '8.0',
 			'UpdateURI'   => 'https://github.com/RocketsAreNostalgic/example-plugin',
 		);
+	}
+
+	protected function tearDown(): void {
+		putenv( self::DISCOVERY_LEASE );
+		putenv( self::INSTALL_LEASE );
+		parent::tearDown();
 	}
 
 	public function testRegistersOnlyTheBetaNativeHooksIdempotently(): void {
@@ -2386,11 +2396,91 @@ final class NativePluginUpdaterTest extends TestCase {
 		self::assertIsString( $path );
 		$database = $GLOBALS['wpdb'];
 		self::assertInstanceOf( FakeWpdb::class, $database );
-		$database->now += 3601;
+		$database->now += 3610;
 
 		$result = $updater->filterPreInstall( true, array( 'plugin' => self::PLUGIN_BASENAME ) );
 		self::assertInstanceOf( \WP_Error::class, $result );
 		self::assertSame( 'github_updater_operation_fence_lost', $result->get_error_code() );
+		self::assertFileDoesNotExist( $path );
+	}
+
+	public function testNativeDiscoveryUsesEnvironmentOverride(): void {
+		putenv( self::DISCOVERY_LEASE . '=60' );
+		$client            = new FakeReleaseArtifactClient( $this->descriptor() );
+		$client->afterList = static function (): void {
+			$database = $GLOBALS['wpdb'];
+			self::assertInstanceOf( FakeWpdb::class, $database );
+			$database->now += 61;
+		};
+		$updater           = $this->updater( $client );
+
+		$result = $updater->filterUpdate(
+			false,
+			array( 'Version' => '1.0.0' ),
+			self::PLUGIN_BASENAME,
+			array()
+		);
+
+		self::assertFalse( $result );
+		self::assertSame( 1, $client->listCalls );
+	}
+
+	public function testDefaultInstallFenceRemainsOwnedBeyondDiscoveryLease(): void {
+		$client  = new FakeReleaseArtifactClient( $this->descriptor() );
+		$updater = $this->updater( $client );
+		$update  = $updater->filterUpdate(
+			false,
+			array( 'Version' => '1.0.0' ),
+			self::PLUGIN_BASENAME,
+			array()
+		);
+		self::assertIsArray( $update );
+		$path = $updater->filterPreDownload(
+			false,
+			$update['package'],
+			null,
+			array( 'plugin' => self::PLUGIN_BASENAME )
+		);
+		self::assertIsString( $path );
+		$database = $GLOBALS['wpdb'];
+		self::assertInstanceOf( FakeWpdb::class, $database );
+		$database->now += 601;
+
+		self::assertTrue(
+			$updater->filterPreInstall( true, array( 'plugin' => self::PLUGIN_BASENAME ) )
+		);
+		$database->now += 3601;
+		$expired        = $updater->filterPreInstall( true, array( 'plugin' => self::PLUGIN_BASENAME ) );
+		self::assertInstanceOf( \WP_Error::class, $expired );
+		self::assertSame( 'github_updater_operation_fence_lost', $expired->get_error_code() );
+		self::assertFileDoesNotExist( $path );
+	}
+
+	public function testInstallFenceUsesEnvironmentOverride(): void {
+		putenv( self::INSTALL_LEASE . '=1200' );
+		$client  = new FakeReleaseArtifactClient( $this->descriptor() );
+		$updater = $this->updater( $client );
+		$update  = $updater->filterUpdate(
+			false,
+			array( 'Version' => '1.0.0' ),
+			self::PLUGIN_BASENAME,
+			array()
+		);
+		self::assertIsArray( $update );
+		$path = $updater->filterPreDownload(
+			false,
+			$update['package'],
+			null,
+			array( 'plugin' => self::PLUGIN_BASENAME )
+		);
+		self::assertIsString( $path );
+		$database = $GLOBALS['wpdb'];
+		self::assertInstanceOf( FakeWpdb::class, $database );
+		$database->now += 1210;
+
+		$expired = $updater->filterPreInstall( true, array( 'plugin' => self::PLUGIN_BASENAME ) );
+		self::assertInstanceOf( \WP_Error::class, $expired );
+		self::assertSame( 'github_updater_operation_fence_lost', $expired->get_error_code() );
 		self::assertFileDoesNotExist( $path );
 	}
 
@@ -2407,7 +2497,7 @@ final class NativePluginUpdaterTest extends TestCase {
 		$client->afterAcquire = static function (): void {
 			$database = $GLOBALS['wpdb'];
 			self::assertInstanceOf( FakeWpdb::class, $database );
-			$database->now += 3601;
+			$database->now += 3610;
 		};
 
 		$result = $updater->filterPreDownload(
@@ -2432,7 +2522,7 @@ final class NativePluginUpdaterTest extends TestCase {
 					if ( 2 === $checks ) {
 						$database = $GLOBALS['wpdb'];
 						self::assertInstanceOf( FakeWpdb::class, $database );
-						$database->now += 3601;
+						$database->now += 3610;
 					}
 					return null;
 				}
@@ -2482,7 +2572,7 @@ final class NativePluginUpdaterTest extends TestCase {
 		self::assertNull( $updater->filterPreUnzipFile( null, $path, '/stage', array(), 1024.0 ) );
 		$database = $GLOBALS['wpdb'];
 		self::assertInstanceOf( FakeWpdb::class, $database );
-		$database->now += 3601;
+		$database->now += 3610;
 
 		$result = $updater->filterSourceSelection(
 			'/stage/example-plugin/',
@@ -2690,6 +2780,9 @@ final class FakeReleaseArtifactClient implements ReleaseArtifactClient {
 	public ?\WP_Error $acquireError = null;
 
 	/** @var null|callable(): void */
+	public $afterList = null;
+
+	/** @var null|callable(): void */
 	public $afterAcquire = null;
 
 	public ?string $lastAcquiredPath = null;
@@ -2718,6 +2811,9 @@ final class FakeReleaseArtifactClient implements ReleaseArtifactClient {
 	public function listReleases( ReleaseQuery $query ) {
 		$this->lastListQuery = $query;
 		++$this->listCalls;
+		if ( null !== $this->afterList ) {
+			( $this->afterList )();
+		}
 		if ( null !== $this->listError ) {
 			return $this->listError;
 		}

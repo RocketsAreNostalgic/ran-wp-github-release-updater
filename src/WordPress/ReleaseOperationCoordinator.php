@@ -15,9 +15,38 @@ final class ReleaseOperationCoordinator {
 
 	private const SCHEMA = 1;
 
+	private const DEFAULT_DISCOVERY_LEASE_SECONDS = 600;
+	private const DEFAULT_INSTALL_LEASE_SECONDS   = 3600;
+
+	private int $discoveryLeaseSeconds;
+	private int $installLeaseSeconds;
+
+	public function __construct() {
+		$this->discoveryLeaseSeconds = self::configuredLeaseSeconds(
+			'RAN_WP_GITHUB_RELEASE_UPDATER_DISCOVERY_LEASE_SECONDS',
+			self::DEFAULT_DISCOVERY_LEASE_SECONDS,
+			60,
+			3600
+		);
+		$this->installLeaseSeconds   = self::configuredLeaseSeconds(
+			'RAN_WP_GITHUB_RELEASE_UPDATER_INSTALL_LEASE_SECONDS',
+			self::DEFAULT_INSTALL_LEASE_SECONDS,
+			600,
+			86400
+		);
+	}
+
+	public function discoveryLeaseSeconds(): int {
+		return $this->discoveryLeaseSeconds;
+	}
+
+	public function installLeaseSeconds(): int {
+		return $this->installLeaseSeconds;
+	}
+
 	/** @return ReleaseOperationClaim|\WP_Error */
 	public function acquire( string $target, string $operation, int $ttl ) {
-		if ( '' === $target || '' === $operation || strlen( $operation ) > 160 || $ttl < 1 || $ttl > 3600 ) {
+		if ( '' === $target || '' === $operation || strlen( $operation ) > 160 || $ttl < 1 || $ttl > 86400 ) {
 			return $this->error( 'invalid', 'The release-operation claim is invalid.' );
 		}
 		$database = $this->database();
@@ -97,7 +126,7 @@ final class ReleaseOperationCoordinator {
 	/** @return ReleaseOperationClaim|\WP_Error */
 	public function renew( ReleaseOperationClaim $claim, int $ttl ) {
 		$database = $this->databaseFor( $claim );
-		if ( $database instanceof \WP_Error || $ttl < 1 || $ttl > 3600 ) {
+		if ( $database instanceof \WP_Error || $ttl < 1 || $ttl > 86400 ) {
 			return $database instanceof \WP_Error ? $database : $this->lost();
 		}
 		[ $wpdb, $table ] = $database;
@@ -206,6 +235,21 @@ final class ReleaseOperationCoordinator {
 			return false;
 		}
 		return 1 === $this->compareAndSwap( $wpdb, $table, $claim->name(), $claim->raw(), $tombstone );
+	}
+
+	private static function configuredLeaseSeconds(
+		string $name,
+		int $fallback,
+		int $minimum,
+		int $maximum
+	): int {
+		$value = defined( $name ) ? constant( $name ) : getenv( $name );
+		if ( is_string( $value ) && 1 === preg_match( '/\A[1-9][0-9]*\z/D', $value ) ) {
+			$value = (int) $value;
+		}
+		return is_int( $value ) && $value >= $minimum && $value <= $maximum
+			? $value
+			: $fallback;
 	}
 
 	/** @return array{object, string}|\WP_Error */

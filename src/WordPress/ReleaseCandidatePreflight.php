@@ -31,8 +31,6 @@ final class ReleaseCandidatePreflight {
 
 	private const CACHE_SCHEMA = 4;
 
-	private const OPERATION_TTL = 600;
-
 	private const FAILURE_COOLDOWN = 60;
 
 	private ReleaseCandidateSelector $candidates;
@@ -434,7 +432,7 @@ final class ReleaseCandidatePreflight {
 		$claim = $this->operations->acquire(
 			$this->coordinationTargetKey(),
 			'managed_preflight:' . $this->cacheKey(),
-			self::OPERATION_TTL
+			$this->operations->discoveryLeaseSeconds()
 		);
 		if ( $claim instanceof \WP_Error ) {
 			if ( 'github_updater_operation_busy' === $claim->get_error_code() ) {
@@ -454,7 +452,10 @@ final class ReleaseCandidatePreflight {
 				$this->publishManagedFailure( $claim, $cached, $list->get_error_code(), self::FAILURE_COOLDOWN );
 				return $list;
 			}
-			$renewed = $this->operations->renew( $claim, self::OPERATION_TTL );
+			$renewed = $this->operations->renew(
+				$claim,
+				$this->operations->discoveryLeaseSeconds()
+			);
 			if ( $renewed instanceof \WP_Error ) {
 				return $renewed;
 			}
@@ -474,7 +475,10 @@ final class ReleaseCandidatePreflight {
 				return $target;
 			}
 			$checkpoint = function () use ( &$claim ): ?\WP_Error {
-				$renewed = $this->operations->renew( $claim, self::OPERATION_TTL );
+				$renewed = $this->operations->renew(
+					$claim,
+					$this->operations->discoveryLeaseSeconds()
+				);
 				if ( $renewed instanceof \WP_Error ) {
 					return $renewed;
 				}

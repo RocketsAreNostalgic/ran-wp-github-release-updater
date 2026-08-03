@@ -202,6 +202,43 @@ ownership. The package does not delete a row merely because one consumer is
 temporarily inactive; removing a consumer therefore leaves that single inert
 row unless site maintenance deliberately removes the consumer's data.
 
+### Lease timing
+
+Discovery and managed-preflight claims last 600 seconds by default.
+Installation claims last 3,600 seconds from the latest successful package
+checkpoint, matching WordPress Core's hour-scale automatic-updater boundary.
+Normal success or failure releases the claim immediately; the duration is the
+nominal bounded abandoned-operation recovery window, not a minimum wait. Rapid
+same-database-second checkpoints may extend the exact expiry by a few seconds
+so each compare-and-set renewal writes observably different bytes.
+
+Developers may set either a WordPress constant in `wp-config.php` or the
+same-named process environment variable:
+
+```php
+define( 'RAN_WP_GITHUB_RELEASE_UPDATER_DISCOVERY_LEASE_SECONDS', 900 );
+define( 'RAN_WP_GITHUB_RELEASE_UPDATER_INSTALL_LEASE_SECONDS', 7200 );
+```
+
+| Setting | Default | Accepted range |
+| --- | ---: | ---: |
+| `RAN_WP_GITHUB_RELEASE_UPDATER_DISCOVERY_LEASE_SECONDS` | 600 | 60–3,600 |
+| `RAN_WP_GITHUB_RELEASE_UPDATER_INSTALL_LEASE_SECONDS` | 3,600 | 600–86,400 |
+
+A defined WordPress constant takes precedence over the corresponding
+environment variable. Values must be integers or unsigned decimal strings;
+invalid or out-of-range selected values use the safe default. Configure every
+web, cron and CLI runtime consistently. The stored database expiry remains the
+sole ownership authority even when processes disagree about configuration.
+
+The package revalidates ownership at every hook WordPress exposes, including
+immediately before returning from `upgrader_source_selection`. WordPress then
+owns backup, destination removal and copying without another package hook.
+Accordingly, the final filesystem transition has WordPress Core-equivalent
+concurrency semantics rather than a claim of absolute fencing across an
+indefinitely suspended PHP worker. No file sentinel or second installer is
+introduced.
+
 ```php
 $preflight = ReleaseCandidatePreflight::fromTarget( array(
 	'repository' => 'RocketsAreNostalgic/example-plugin',
