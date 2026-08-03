@@ -17,12 +17,13 @@ if ( ! is_object( $ran_updater_lifecycle_plugin_facade )
 	throw new RuntimeException( 'The standalone plugin facade is unavailable.' );
 }
 $ran_updater_lifecycle_plugin_diagnostics = $ran_updater_lifecycle_plugin_facade->diagnostics();
-if ( 'active' !== ( $ran_updater_lifecycle_plugin_diagnostics['state'] ?? null )
+if ( 'idle' !== ( $ran_updater_lifecycle_plugin_diagnostics['state'] ?? null )
+	|| 'not_checked' !== ( $ran_updater_lifecycle_plugin_diagnostics['code'] ?? null )
 	|| ! ran_wp_github_release_updater_v1_has_registered_target(
 		'plugin',
 		'ran-updater-lifecycle-registrar/lifecycle-registrar.php'
 	) ) {
-	throw new RuntimeException( 'Standalone plugin registration is not active.' );
+	throw new RuntimeException( 'Standalone plugin registration is not idle and ready.' );
 }
 
 $ran_updater_lifecycle_facades = $GLOBALS['ran_updater_lifecycle_early_facades'] ?? null;
@@ -38,9 +39,10 @@ foreach ( array( 'ran-updater-registrar-active', 'ran-updater-registrar-inactive
 	}
 	$ran_updater_lifecycle_diagnostics = $ran_updater_lifecycle_facade->diagnostics();
 	if ( true !== ( $ran_updater_lifecycle_diagnostics['registered'] ?? null )
-		|| 'active' !== ( $ran_updater_lifecycle_diagnostics['state'] ?? null )
+		|| 'idle' !== ( $ran_updater_lifecycle_diagnostics['state'] ?? null )
+		|| 'not_checked' !== ( $ran_updater_lifecycle_diagnostics['code'] ?? null )
 		|| true !== ( $ran_updater_lifecycle_diagnostics['selection_fixed'] ?? null ) ) {
-		throw new RuntimeException( 'An early theme target is not active: ' . $ran_updater_lifecycle_stylesheet );
+		throw new RuntimeException( 'An early theme target is not idle and ready: ' . $ran_updater_lifecycle_stylesheet );
 	}
 	if ( ! ran_wp_github_release_updater_v1_has_registered_target( 'theme', $ran_updater_lifecycle_stylesheet ) ) {
 		throw new RuntimeException( 'An early theme target was not accepted: ' . $ran_updater_lifecycle_stylesheet );

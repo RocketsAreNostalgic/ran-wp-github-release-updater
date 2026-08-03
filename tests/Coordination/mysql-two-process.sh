@@ -55,10 +55,16 @@ cleanup() {
 }
 trap cleanup EXIT
 
-main_url='http://localhost'
-child_url='http://localhost/child/'
 worker="$root/tests/Coordination/mysql-worker.php"
+export RAN_UPDATER_LIFECYCLE_BOOTSTRAP="$root/bootstrap.php"
 export RAN_UPDATER_RUNTIME="$root/runtime.php"
+main_url="$("$php_bin" "$wp_cli" option get siteurl --path="$wordpress")"
+main_url="${main_url%/}"
+if [[ ! "$main_url" =~ ^https?://[^/]+$ ]]; then
+	echo 'The coordination proof requires a root-level disposable site URL.' >&2
+	exit 2
+fi
+child_url="$main_url/child/"
 
 "$php_bin" "$wp_cli" core multisite-convert \
 	--path="$wordpress" \
