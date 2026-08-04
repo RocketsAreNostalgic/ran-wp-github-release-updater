@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.0.0-beta.4](https://github.com/RocketsAreNostalgic/ran-wp-github-release-updater/compare/v2.0.0-beta.3...v2.0.0-beta.4) (2026-08-04)
+
+
+### Bug Fixes
+
+* retain install state until finalization ([426e290](https://github.com/RocketsAreNostalgic/ran-wp-github-release-updater/commit/426e2909f79b61fe4a1938c23c69fdb7e21d97bb))
+* retain install state until finalization ([549cfff](https://github.com/RocketsAreNostalgic/ran-wp-github-release-updater/commit/549cfff1ee8417e6e67097d44c000c6d59ae6f50))
+
 ## [2.0.0-beta.3](https://github.com/RocketsAreNostalgic/ran-wp-github-release-updater/compare/v2.0.0-beta.2...v2.0.0-beta.3) (2026-08-03)
 
 
