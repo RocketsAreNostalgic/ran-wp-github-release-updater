@@ -2331,6 +2331,24 @@ final class NativePluginUpdaterTest extends TestCase {
 		self::assertSame( 'release_available', $updater->diagnostics()['code'] );
 
 		WordPressState::$pluginData[ $this->pluginFile ]['Version'] = '1.2.3';
+		foreach ( array( 1_000, 1_000 ) as $now ) {
+			$this->now = $now;
+			self::assertFalse(
+				$updater->filterUpdate(
+					false,
+					array( 'Version' => '1.2.3' ),
+					self::PLUGIN_BASENAME,
+					array()
+				)
+			);
+			$pending = $this->nativeState( $updater );
+			self::assertSame( 'available', $pending['status'] );
+			self::assertSame( '1.2.3', $pending['offer']['version'] );
+			self::assertArrayNotHasKey( 'current', $pending );
+			self::assertSame( 'release_available', $updater->diagnostics()['code'] );
+			self::assertArrayHasKey( PHP_INT_MAX, WordPressState::$actions['shutdown'] );
+			$this->assertInstallFenceHeld( $updater );
+		}
 		$updater->finalizePendingInstall();
 		$after = $updater->diagnostics();
 		self::assertNull( $after['offered_version'] );
@@ -2417,6 +2435,23 @@ final class NativePluginUpdaterTest extends TestCase {
 			$hookExtra
 		);
 		$updater->observeCompletion( null, $hookExtra );
+		foreach ( array( 1_000, 1_000 ) as $now ) {
+			$this->now = $now;
+			self::assertFalse(
+				$updater->filterUpdate(
+					false,
+					array( 'Version' => '1.2.3' ),
+					'locally-renamed-theme',
+					array()
+				)
+			);
+			$pending = $this->nativeState( $updater );
+			self::assertSame( 'available', $pending['status'] );
+			self::assertSame( '1.2.3', $pending['offer']['version'] );
+			self::assertArrayNotHasKey( 'current', $pending );
+			self::assertSame( 'release_available', $updater->diagnostics()['code'] );
+			$this->assertInstallFenceHeld( $updater );
+		}
 		$updater->finalizePendingInstall();
 
 		foreach ( array( 22_601, 44_202 ) as $now ) {
@@ -3226,6 +3261,17 @@ final class NativePluginUpdaterTest extends TestCase {
 		);
 		self::assertInstanceOf( ReleaseOperationClaim::class, $claim );
 		self::assertTrue( $coordinator->release( $claim ) );
+	}
+
+	private function assertInstallFenceHeld( NativePluginUpdater $updater ): void {
+		$coordinator = new ReleaseOperationCoordinator();
+		$busy        = $coordinator->acquire(
+			$this->coordinationTarget( $updater ),
+			'test_during_install',
+			600
+		);
+		self::assertInstanceOf( \WP_Error::class, $busy );
+		self::assertSame( 'github_updater_operation_busy', $busy->get_error_code() );
 	}
 
 	/** @return array<string, mixed> */

@@ -1738,6 +1738,11 @@ final class NativePluginUpdater {
 	 * @param Offer $release Current verified release.
 	 */
 	private function storeCurrent( array $release, ?ConditionalState $conditional = null ): void {
+		// Core refreshes update metadata before shutdown finalization. Keep the
+		// exact offer and installation fence authoritative until that final readback.
+		if ( null !== $this->pendingArchive ) {
+			return;
+		}
 		$state   = $this->cachedState();
 		$current = $this->validatedOffer( $state['current'] ?? null, false );
 		if ( null === $conditional
