@@ -400,9 +400,11 @@ installer, scheduler, candidate store, or CLI.
 ## Release asset contract
 
 This is the publishing contract for WordPress plugins and themes that consume
-the library. Release Please in this library repository updates its version
-sources, changelog, tag and GitHub source release only; it does not build or
-upload a consumer's ZIP.
+the library. Release Please in this library repository prepares its version
+sources, changelog and release notes only. After exact-candidate Quality proof,
+the repository publisher creates and reads back the tag and immutable GitHub
+source release with no uploaded asset; neither owner builds or uploads a
+consumer's ZIP.
 
 Publish exactly one uploaded `.zip` asset on the GitHub Release:
 
@@ -435,6 +437,10 @@ WordPress Core performs extraction and installation; this library does not
 implement a second installer.
 
 ## Development
+
+The full gate requires PHP 8.2, Composer and Node.js 24. Node executes only the
+repository publisher outcome fixtures; it is not a library runtime or Composer
+package dependency.
 
 ```sh
 composer install

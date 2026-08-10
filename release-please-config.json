@@ -11,6 +11,7 @@
     ".": {
       "package-name": "ran/wp-github-release-updater",
       "changelog-path": "CHANGELOG.md",
+      "skip-github-release": true,
       "changelog-sections": [
         {
           "type": "feat",
