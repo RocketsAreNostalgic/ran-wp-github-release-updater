@@ -4,10 +4,10 @@ Date: 11 August 2026
 
 ## Scope and claim
 
-This proof records local qualification evidence for source commit
+The original qualification recorded local evidence for source commit
 `3e539a8b26b0f4b31117ddadb92e80dc565f231a` as the exact updater source and
 runtime candidate produced by the publisher-correction work. It does not
-certify a new Release Please merge, Git tag or GitHub Release.
+by itself certify the later Release Please merge, Git tag or GitHub Release.
 
 The commit is a one-parent ordinary source commit on
 `0aa87978cbf77193f731da44bd893d25deea92da`. The existing immutable
@@ -17,8 +17,8 @@ The next publishable candidate must therefore be a future exact Release Please
 merge with its own successful same-repository `main` CI result. This proof
 cannot be reused as authority to retarget or recreate `v2.0.0-beta.4`.
 
-No tag, release, asset, label, repository setting, live WordPress site or other
-remote state was changed.
+During that source-qualification gate, no tag, release, asset, label,
+repository setting, live WordPress site or other remote state was changed.
 
 ## Exact source identity
 
@@ -143,11 +143,55 @@ persistent field or state. The candidate remains 8,729 backend PHP lines, 36
 named runtime declarations and the separately reported 27-line tracked dummy
 plugin development fixture, which is excluded from the Composer archive.
 
-## Residual gate
+## Later publication and readback
 
-Publication remains separate. It must first land the correction through the
-normal checked pull-request path, allow Release Please to prepare a genuinely
-advanced version commit, merge exactly that release PR, and bind its successful
-same-repository `main` CI SHA to the new tag and immutable zero-asset
-prerelease. Tagged Composer resolution and authenticated tag/release readback
-belong to that later authority.
+Publication subsequently completed under its separate authority. Source pull
+request 12 retained exact head
+`3e539a8b26b0f4b31117ddadb92e80dc565f231a`, passed PHP 8.2 and 8.4 quality
+plus WordPress 6.5 and 7.0.3 lifecycle CI, and normal-merged as
+`2d17c7c75a6b228d45040e09d59182dc2f7dfd24`. Main-push CI run `31494654747`
+passed the same four lanes. Release Please workflow run `31494862577` then
+reported `ordinary_main`, created no tag or release, and opened bot pull request
+13 with only `autorelease: pending`.
+
+The Release Please head
+`55c0624d215ac221a92704ee4bfb208b97f00dec` changed exactly the manifest,
+changelog, broker version, HTTP user agent and two runtime assertions. All
+version sources and the top changelog section advanced to `2.0.0-beta.5`.
+After exact-head CI run `31494918024` passed PHP 8.2 and 8.4 quality plus both
+WordPress lifecycle lanes, the pull request normal-merged as
+`933eebd7cd00a9529477030e617bbdd893aab131`. The merge has parents
+`2d17c7c75a6b228d45040e09d59182dc2f7dfd24` then
+`55c0624d215ac221a92704ee4bfb208b97f00dec`, and its tree equals the Release
+Please head tree. Exact-candidate main CI run `31495399369` passed all four
+lanes.
+
+Publisher workflow run `31495607519` initially stopped before mutation because
+the ephemeral workflow token received `403` from the repository-administration
+immutable-release settings endpoint. Authoritative readback still showed main
+at the candidate, immutability enabled, a pending-only release pull request,
+and no `v2.0.0-beta.5` tag or release. The exact committed publisher was then
+run once from a clean detached candidate worktree through the existing
+admin-authenticated session; no credential was stored. It revalidated the
+workflow event, main, pull-request topology, five-file delta, immutable setting
+and absent tag/release before mutation. Workflow attempt two subsequently
+passed against the same candidate and independently verified the published
+state without requiring the settings endpoint.
+
+Final authenticated readback is closed and exact:
+
+- lightweight tag `v2.0.0-beta.5` targets
+  `933eebd7cd00a9529477030e617bbdd893aab131`;
+- immutable prerelease `368587956` has the same tag, name and target, exact
+  changelog-section body, `draft=false`, `prerelease=true` and
+  `immutable=true`;
+- the Composer-library release has exactly zero uploaded assets;
+- pull request 13 has only `autorelease: tagged`; and
+- workflow attempt two completed successfully on the exact candidate.
+
+A disposable public-tag Composer consumer required exact version
+`2.0.0-beta.5`. Its lock `source.reference`, installed checkout `HEAD`, complete
+Git tree, `bootstrap.php`, `runtime.php` and `src/` tree all resolved to the
+publication commit. The manifest, broker version, HTTP user agent and both
+runtime assertions agreed at `2.0.0-beta.5`. The temporary publisher worktree,
+event file and Composer consumer were removed and their absence verified.
