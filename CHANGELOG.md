@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.0.0-beta.5](https://github.com/RocketsAreNostalgic/ran-wp-github-release-updater/compare/v2.0.0-beta.4...v2.0.0-beta.5) (2026-08-11)
+
+
+### Bug Fixes
+
+* publish updater releases from green merges ([2d17c7c](https://github.com/RocketsAreNostalgic/ran-wp-github-release-updater/commit/2d17c7c75a6b228d45040e09d59182dc2f7dfd24))
+* publish updater releases from green merges ([3e539a8](https://github.com/RocketsAreNostalgic/ran-wp-github-release-updater/commit/3e539a8b26b0f4b31117ddadb92e80dc565f231a))
+
 ## [2.0.0-beta.4](https://github.com/RocketsAreNostalgic/ran-wp-github-release-updater/compare/v2.0.0-beta.3...v2.0.0-beta.4) (2026-08-04)
 
 
