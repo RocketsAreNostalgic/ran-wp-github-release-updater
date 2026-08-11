@@ -245,6 +245,14 @@ concurrency semantics rather than a claim of absolute fencing across an
 indefinitely suspended PHP worker. No file sentinel or second installer is
 introduced.
 
+The reviewed [install-session ownership gate](docs/install-session-ownership-gate.md)
+retains `NativePluginUpdater` as the single WordPress adapter. A proposed
+hook-free session extraction could relocate fields, but could not delete total
+code, lifecycle branches or custody owners without splitting shutdown and
+persistent-state transitions. Reopen that decision only on new state, another
+illegal-state lifecycle defect, duplicated cleanup or a second independently
+changing install lifecycle.
+
 ```php
 $preflight = ReleaseCandidatePreflight::fromTarget( array(
 	'repository' => 'RocketsAreNostalgic/example-plugin',
