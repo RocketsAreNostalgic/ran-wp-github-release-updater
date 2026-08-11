@@ -23,6 +23,7 @@
   },
   "scripts": {
     "test": "phpunit --configuration phpunit.xml",
+    "test:release-publisher": "node --test tests/release-publisher.test.mjs",
     "test:performance": "php tests/Characterization/managed-preflight-performance.php",
     "lint": "phpcs --standard=phpcs.xml --report=summary",
     "analyze": "phpstan analyse --configuration=phpstan.neon --no-progress --debug --memory-limit=512M",
@@ -30,6 +31,7 @@
     "check": [
       "@validate:strict",
       "@test",
+      "@test:release-publisher",
       "@test:performance",
       "@lint",
       "@analyze"
