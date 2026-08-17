@@ -166,7 +166,7 @@ if ( ! $ran_wp_github_release_updater_broker_is_compatible ) {
 			}
 
 			if ( function_exists( 'add_action' ) ) {
-				add_action( 'plugins_loaded', array( $this, 'selectAndBoot' ), PHP_INT_MIN, 0 );
+				add_action( 'plugins_loaded', array( $this, 'selectAndBoot' ), PHP_INT_MAX - 1, 0 );
 			}
 		}
 
