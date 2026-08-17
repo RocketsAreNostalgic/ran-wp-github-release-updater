@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.0.0-beta.6](https://github.com/RocketsAreNostalgic/ran-wp-github-release-updater/compare/v2.0.0-beta.5...v2.0.0-beta.6) (2026-08-17)
+
+
+### Bug Fixes
+
+* **bootstrap:** wait for provider-ready targets ([de6642d](https://github.com/RocketsAreNostalgic/ran-wp-github-release-updater/commit/de6642d841e46250f29f6ec485eee373e27562d7))
+* **bootstrap:** wait for provider-ready targets ([f6638eb](https://github.com/RocketsAreNostalgic/ran-wp-github-release-updater/commit/f6638ebe2d7751182e427ea6ac8cb691ef90f5da))
+
 ## [2.0.0-beta.5](https://github.com/RocketsAreNostalgic/ran-wp-github-release-updater/compare/v2.0.0-beta.4...v2.0.0-beta.5) (2026-08-11)
 
 
