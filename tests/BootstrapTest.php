@@ -161,6 +161,90 @@ final class BootstrapTest extends TestCase {
 	}
 
 	/**
+	 * Provider targets can register during the normal plugins_loaded window.
+	 *
+	 * @dataProvider providerPluginLoadOrderProvider
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 * @param list<string> $plugins Physical plugin load order.
+	 */
+	public function testProviderWindowRegistrationPrecedesRuntimeSelection( array $plugins ): void {
+		foreach ( $plugins as $plugin ) {
+			require __DIR__ . '/Support/ProviderWindow/' . $plugin;
+		}
+
+		self::assertArrayHasKey(
+			PHP_INT_MAX - 1,
+			WordPressState::$actions['plugins_loaded']
+		);
+		WordPressState::doAction( 'plugins_loaded' );
+
+		$facade = $GLOBALS['ran_wp_github_release_updater_provider_window_facade'];
+		self::assertSame(
+			'awaiting_runtime',
+			$GLOBALS['ran_wp_github_release_updater_provider_window_registration_code']
+		);
+		self::assertSame( 'active', $facade->diagnostics()['state'] );
+		self::assertSame( 'runtime_selected', $facade->diagnostics()['code'] );
+		self::assertCount(
+			1,
+			$GLOBALS['ran_wp_github_release_updater_broker_runtime_targets']
+		);
+		self::assertSame(
+			'/plugins/provider-package/provider-package.php',
+			$GLOBALS['ran_wp_github_release_updater_broker_runtime_targets'][0]['pluginFile']
+		);
+	}
+
+	/**
+	 * Physical plugin orders for provider-window registration.
+	 *
+	 * @return array<string, array{0: list<string>}>
+	 */
+	public static function providerPluginLoadOrderProvider(): array {
+		return array(
+			'consumer then provider' => array(
+				array( 'consumer-plugin.php', 'external-provider-plugin.php' ),
+			),
+			'provider then consumer' => array(
+				array( 'external-provider-plugin.php', 'consumer-plugin.php' ),
+			),
+		);
+	}
+
+	/**
+	 * A target declared after the end-of-window selector remains late.
+	 *
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function testRegistrationAfterEndOfProviderWindowRemainsLate(): void {
+		$factory = require dirname( __DIR__ ) . '/bootstrap.php';
+		$facade  = $factory(
+			pluginFile: '/plugins/late-provider/late-provider.php',
+			repository: 'owner/late-provider',
+			providerRepositoryId: '123456789'
+		);
+
+		WordPressState::addAction(
+			'plugins_loaded',
+			static function () use ( $facade ): void {
+				$facade->register();
+			},
+			PHP_INT_MAX,
+			0
+		);
+		WordPressState::doAction( 'plugins_loaded' );
+
+		self::assertSame( 'inactive', $facade->diagnostics()['state'] );
+		self::assertSame( 'late_registration', $facade->diagnostics()['code'] );
+		self::assertArrayNotHasKey(
+			'ran_wp_github_release_updater_broker_runtime_targets',
+			$GLOBALS
+		);
+	}
+
+	/**
 	 * Mixed copies select the same highest compatible runtime and retain both
 	 * target origins regardless of their relative registration order.
 	 *

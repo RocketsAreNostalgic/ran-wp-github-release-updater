@@ -133,12 +133,14 @@ accessToken: static fn (): ?string => getenv( 'RAN_GITHUB_TOKEN' ) ?: null,
 
 The token is never placed in the package URL, cache, notices or diagnostics.
 
-Registration belongs directly in the plugin's main file, not in a
-`plugins_loaded` callback. A theme's `functions.php` loads after
-`plugins_loaded`, so direct theme self-registration is rejected as
-`inactive / late_registration` on every request; it is not deferred to a later
-request. Inactive themes do not execute and cannot self-register. `register()`
-is idempotent and `diagnostics()` is passive: it does not make a remote request.
+Load the bootstrap from the plugin's main file. The target may register there
+or from a `plugins_loaded` callback below `PHP_INT_MAX - 1`; the broker selects
+one runtime at that priority. A target registered at or after that selector is
+rejected as `inactive / late_registration` for the current request. A theme's
+`functions.php` loads after `plugins_loaded`, so a theme still cannot
+self-register. Inactive themes do not execute and cannot self-register.
+`register()` is idempotent and `diagnostics()` is passive: it does not make a
+remote request.
 
 Set `nativeDiscovery: false` when a consumer must still participate in shared
 runtime arbitration but must not create a native update target. The target
