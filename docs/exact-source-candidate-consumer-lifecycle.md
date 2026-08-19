@@ -195,3 +195,63 @@ Git tree, `bootstrap.php`, `runtime.php` and `src/` tree all resolved to the
 publication commit. The manifest, broker version, HTTP user agent and both
 runtime assertions agreed at `2.0.0-beta.5`. The temporary publisher worktree,
 event file and Composer consumer were removed and their absence verified.
+
+## U-6 pagination owner decision — 20 August 2026
+
+**Decision: RETAIN.** This is the updater's canonical owner record for U-6.
+It preserves the accepted bounded discovery behaviour; it is not an
+implementation, release, publication, deployment or runtime-change authority.
+
+### Current bounded behaviour and accepted limitation
+
+`GitHubReleaseArtifactService::listReleases()` requests at most two pages of
+20 releases. It sends conditional validators only on page one. If page one
+returns `304 Not Modified`, the service returns immediately and does not read
+page two. Consequently, a page-one validator can stand in for a later page: a
+later-page eligibility change is not observed on that conditional pass. This
+is a real limitation of the current two-page protocol, not a claim that page
+two has an independent validator.
+
+The limitation is retained because none of the active Phase 00 reconsideration
+triggers is evidenced: no real immutable workflow has shown a page-one `304`
+masking a later-page eligibility change; no authorised forced recovery has
+failed on its first attempt and no ordinary recovery has exceeded its documented
+bound; and no test-only proof has established a smaller stateless correction
+that preserves useful page-one reuse and the existing request and identity
+bounds. A proposed correction is not evidence for reopening this decision.
+
+### Recovery and evidence
+
+Recovery remains bounded. An authorised `force-check=1` bypasses ordinary
+offer/current/failure freshness and re-enters remote discovery, but preserves
+the retained conditional validator; it observes a later-page change only when
+page one is not returned as `304`. A successful updater native-state clearance,
+or another missing or invalidated retained validator, makes the next discovery
+unconditional. Deleting only Core's update transient is not evidence that the
+updater validator was cleared. These are the accepted recovery boundaries; a
+forced first attempt that still cannot recover is itself a reconsideration
+trigger. None creates a page-two validator or a new persistence domain.
+
+Current code evidence is limited to the existing two-page loop,
+`MAX_RELEASE_PAGES = 2` and `RELEASE_PAGE_SIZE = 20`, with page-one-only
+conditional headers and an immediate page-one `304` return. The existing
+artifact-service test proves retained page-one validators, the `304` result and
+the ten-second/zero-redirect request bounds; updater tests prove cache bypass
+for an authorised forced check and an invalid validator becoming an
+unconditional request. No pagination test, runtime behaviour or public contract
+is changed by this record.
+
+### Reconsideration boundary
+
+Reopen only if one active Phase 00 trigger is independently proved: (1) a real
+immutable workflow demonstrates that page-one `304` masks a later-page
+eligibility change; (2) forced recovery fails on its first authorised attempt
+or ordinary recovery exceeds the documented bound; or (3) a test-only spike
+proves a small, stateless correction that keeps useful page-one reuse and the
+current request and repository-identity bounds. A `REOPEN` record must cite
+that evidence and separately authorize only the smallest correction preventing
+a later-page-dependent decision from reuse after page-one-only validation.
+
+This RETAIN record has zero pagination, runtime, public-API and persistent-state
+delta. It neither alters source nor grants authority for a commit, release,
+publication, deployment or any other implementation work.
