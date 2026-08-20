@@ -411,9 +411,11 @@ still lists up to eight lightweight release summaries without inspecting ZIPs.
 Release-list responses are capped at 256 KiB per page
 and 512 KiB in total. Every request has a ten-second timeout and follows at most one validated
 redirect. Authentication, transport and rate-limit failures retain their exact
-diagnostic classification and cooldown. A failed or exhausted discovery keeps
-the last verified cache record but returns the incoming WordPress host-filter
-value; only a verified RAN offer or the explicit disabled policy replaces it.
+diagnostic classification and cooldown. Failed, exhausted, or rate-limited
+discovery clears the readiness-authorizing RAN offer while retaining bounded
+diagnostics and conditional request state. When no safe offer can be supplied,
+the updater returns the incoming WordPress host-filter value; only a verified
+RAN offer or the explicit disabled policy replaces it.
 
 One compatible cold target uses five logical requests, six transport hops and
 one ZIP. The terminal two-incompatible case is capped at nine logical requests,

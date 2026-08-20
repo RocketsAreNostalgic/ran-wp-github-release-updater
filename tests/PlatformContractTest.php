@@ -19,7 +19,8 @@ final class PlatformContractTest extends TestCase {
 	}
 
 	public function testReadmeExamplesMatchTheBootstrapAndSelectedRuntimeContract(): void {
-		$readme = (string) file_get_contents( dirname( __DIR__ ) . '/README.md' );
+		$readme           = (string) file_get_contents( dirname( __DIR__ ) . '/README.md' );
+		$normalizedReadme = str_replace( "\n", ' ', $readme );
 
 		self::assertStringContainsString(
 			'composer require ran/wp-github-release-updater:^2.0@beta',
@@ -45,5 +46,9 @@ final class PlatformContractTest extends TestCase {
 			'providerRepositoryId: \'987654321\'',
 			$readme
 		);
+		self::assertStringContainsString( 'clears the readiness-authorizing RAN offer', $normalizedReadme );
+		self::assertStringContainsString( 'bounded diagnostics and conditional request state', $normalizedReadme );
+		self::assertStringContainsString( 'incoming WordPress host-filter value', $normalizedReadme );
+		self::assertStringNotContainsString( 'last verified cache record', $readme );
 	}
 }
