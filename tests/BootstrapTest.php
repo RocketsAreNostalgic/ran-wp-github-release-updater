@@ -605,6 +605,147 @@ final class BootstrapTest extends TestCase {
 	}
 
 	/**
+	 * A bootstrap failure has one generic, redacted notice on either relevant
+	 * WordPress update surface, without relying on the unavailable runtime.
+	 *
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function testRuntimeLoadFailureNoticeIsScopedRedactedAndDeduplicated(): void {
+		$factory = require dirname( __DIR__ ) . '/bootstrap.php';
+		$broker  = $GLOBALS['ran_wp_github_release_updater_v1_broker'];
+		$broker->registerCandidate(
+			array(
+				'broker_protocol' => 1,
+				'package_version' => '99.0.0-dev',
+				'php_floor'       => '8.2.0',
+				'wordpress_floor' => '6.5',
+				'path'            => __DIR__ . '/Support/FailingRuntime',
+				'runtime_file'    => __DIR__ . '/Support/FailingRuntime/runtime.php',
+			)
+		);
+		$facade = $factory(
+			pluginFile: '/private/<script>alert(1)</script>/example.php',
+			repository: 'owner/secret-token',
+			providerRepositoryId: '123456789',
+			pluginSlug: '<script>secret-token</script>',
+			accessToken: 'secret-token'
+		);
+		$facade->register();
+		$theme = $factory(
+			pluginFile: '/private/second-theme/style.css',
+			repository: 'owner/second-secret-token',
+			providerRepositoryId: '987654321',
+			pluginSlug: 'second-theme',
+			targetType: 'theme',
+			stylesheet: 'second-theme'
+		);
+		$theme->register();
+
+		WordPressState::doAction( 'plugins_loaded' );
+
+		self::assertSame( 1, WordPressState::hookCount( 'admin_notices' ) );
+		self::assertSame( 1, WordPressState::hookCount( 'network_admin_notices' ) );
+		self::assertSame( 'runtime_load_failed', $theme->diagnostics()['code'] );
+
+		WordPressState::$currentUserCan = false;
+		ob_start();
+		WordPressState::doAction( 'admin_notices' );
+		self::assertSame( '', ob_get_clean() );
+
+		WordPressState::$currentUserCan = true;
+		WordPressState::$screenBase     = 'dashboard';
+		ob_start();
+		WordPressState::doAction( 'admin_notices' );
+		self::assertSame( '', ob_get_clean() );
+
+		WordPressState::$screenBase = 'plugins-network';
+		ob_start();
+		WordPressState::doAction( 'network_admin_notices' );
+		self::assertSame( '', ob_get_clean() );
+
+		WordPressState::$multisite  = true;
+		WordPressState::$screenBase = 'plugins-network';
+		ob_start();
+		WordPressState::doAction( 'network_admin_notices' );
+		$output = ob_get_clean();
+		self::assertIsString( $output );
+		self::assertStringContainsString( 'notice-error', $output );
+		self::assertStringContainsString( 'could not load its GitHub release updater', $output );
+		self::assertStringNotContainsString( '<script>', $output );
+		self::assertStringNotContainsString( 'secret-token', $output );
+		self::assertStringNotContainsString( '/private/', $output );
+
+		ob_start();
+		WordPressState::doAction( 'admin_notices' );
+		self::assertSame( '', ob_get_clean() );
+	}
+
+	/**
+	 * Only an actual selected-runtime load failure creates the bootstrap notice.
+	 *
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function testBootstrapFailureNoticeIsAbsentForNoCompatibleAndLateStates(): void {
+		$GLOBALS['wp_version'] = '0.1';
+		$factory               = require dirname( __DIR__ ) . '/bootstrap.php';
+		$success               = $factory(
+			pluginFile: '/plugins/success/success.php',
+			repository: 'owner/success',
+			providerRepositoryId: '123456789'
+		);
+		$success->register();
+		WordPressState::doAction( 'plugins_loaded' );
+
+		self::assertSame( 0, WordPressState::hookCount( 'admin_notices' ) );
+		self::assertSame( 0, WordPressState::hookCount( 'network_admin_notices' ) );
+		self::assertSame( 'no_compatible_runtime', $success->diagnostics()['code'] );
+
+		$late = $factory(
+			pluginFile: '/plugins/late/late.php',
+			repository: 'owner/late',
+			providerRepositoryId: '123456789'
+		);
+		$late->register();
+		self::assertSame( 'late_registration', $late->diagnostics()['code'] );
+		self::assertSame( 0, WordPressState::hookCount( 'admin_notices' ) );
+		self::assertSame( 0, WordPressState::hookCount( 'network_admin_notices' ) );
+	}
+
+	/**
+	 * A selected working runtime does not create a bootstrap failure notice.
+	 *
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function testBootstrapFailureNoticeIsAbsentForSuccessfulRuntimeSelection(): void {
+		$factory = require dirname( __DIR__ ) . '/bootstrap.php';
+		$broker  = $GLOBALS['ran_wp_github_release_updater_v1_broker'];
+		$broker->registerCandidate(
+			array(
+				'broker_protocol' => 1,
+				'package_version' => '99.0.0-dev',
+				'php_floor'       => '8.2.0',
+				'wordpress_floor' => '6.5',
+				'path'            => __DIR__ . '/Support/TargetCaptureRuntime',
+				'runtime_file'    => __DIR__ . '/Support/TargetCaptureRuntime/runtime.php',
+			)
+		);
+		$facade = $factory(
+			pluginFile: '/plugins/success/success.php',
+			repository: 'owner/success',
+			providerRepositoryId: '123456789'
+		);
+		$facade->register();
+		WordPressState::doAction( 'plugins_loaded' );
+
+		self::assertSame( 'runtime_selected', $facade->diagnostics()['code'] );
+		self::assertSame( 0, WordPressState::hookCount( 'admin_notices' ) );
+		self::assertSame( 0, WordPressState::hookCount( 'network_admin_notices' ) );
+	}
+
+	/**
 	 * Runtime diagnostics are passive, bounded and allowlisted.
 	 *
 	 * @runInSeparateProcess
