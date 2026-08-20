@@ -307,6 +307,25 @@ final class NativePluginUpdaterTest extends TestCase {
 		self::assertSame( 1, $client->describeCalls );
 	}
 
+	public function testRefreshCacheReturnsFalseWhenCoreTransientDeletionIsItsOnlySuccess(): void {
+		$updater = $this->updater( new FakeReleaseArtifactClient( $this->descriptor() ) );
+		$updater->filterUpdate( false, array( 'Version' => '1.0.0' ), self::PLUGIN_BASENAME, array() );
+		WordPressState::$siteTransients['update_plugins'] = array( 'checked' => true );
+
+		$coordinator = new ReleaseOperationCoordinator();
+		$claim       = $coordinator->acquire(
+			$this->coordinationTarget( $updater ),
+			'native_discovery:refresh-blocker',
+			30
+		);
+		self::assertInstanceOf( ReleaseOperationClaim::class, $claim );
+
+		self::assertFalse( $updater->refreshCache() );
+		self::assertArrayNotHasKey( 'update_plugins', WordPressState::$siteTransients );
+		self::assertSame( array(), $this->nativeState( $updater ) );
+		self::assertTrue( $coordinator->release( $claim ) );
+	}
+
 	public function testCurrentReleaseIsCachedWithoutRemainingAnOffer(): void {
 		$client  = new FakeReleaseArtifactClient( $this->descriptor() );
 		$updater = $this->updater( $client );
@@ -716,7 +735,7 @@ final class NativePluginUpdaterTest extends TestCase {
 		self::assertSame( 2, $client->acquireCalls );
 	}
 
-	public function testRejectedCandidatePreservesIncomingFilterAndPriorVerifiedOffer(): void {
+	public function testRejectedCandidateClearsPriorReadinessWhilePreservingIncomingFilter(): void {
 		$client  = new FakeReleaseArtifactClient( $this->descriptor() );
 		$updater = $this->updater( $client );
 		self::assertIsArray(
@@ -742,7 +761,7 @@ final class NativePluginUpdaterTest extends TestCase {
 
 		self::assertSame( $incoming, $result );
 		self::assertSame( CandidateValidation::VERSION_MISMATCH, $updater->diagnostics()['code'] );
-		self::assertSame( '1.2.3', $updater->diagnostics()['offered_version'] );
+		self::assertNull( $updater->diagnostics()['offered_version'] );
 		self::assertSame( 2, $client->acquireCalls );
 	}
 
@@ -830,7 +849,7 @@ final class NativePluginUpdaterTest extends TestCase {
 		self::assertSame( 1, $client->acquireCalls );
 	}
 
-	public function testRateLimitCooldownPreservesIncomingFilterAndCachedOffer(): void {
+	public function testRateLimitCooldownClearsReadinessWhilePreservingIncomingFilter(): void {
 		$client  = new FakeReleaseArtifactClient( $this->descriptor() );
 		$updater = $this->updater( $client );
 		$first   = $updater->filterUpdate(
@@ -857,7 +876,7 @@ final class NativePluginUpdaterTest extends TestCase {
 
 		self::assertSame( $incoming, $limited );
 		self::assertSame( 'rate_limited', $updater->diagnostics()['code'] );
-		self::assertSame( '1.2.3', $updater->diagnostics()['offered_version'] );
+		self::assertNull( $updater->diagnostics()['offered_version'] );
 		self::assertSame( 2, $client->listCalls );
 		self::assertSame( $this->now + 120, $this->nativeState( $updater )['cooldown_until'] );
 	}
@@ -1109,7 +1128,7 @@ final class NativePluginUpdaterTest extends TestCase {
 
 		self::assertFalse( $result );
 		self::assertSame( 2, $client->describeCalls );
-		self::assertSame( '1.2.3', $updater->diagnostics()['offered_version'] );
+		self::assertNull( $updater->diagnostics()['offered_version'] );
 		self::assertSame( 'github_updater_release_changed', $updater->diagnostics()['code'] );
 	}
 
@@ -1293,8 +1312,10 @@ final class NativePluginUpdaterTest extends TestCase {
 		);
 		self::assertSame( 3, $client->listCalls );
 		self::assertSame( 'rate_limited', $updater->diagnostics()['code'] );
-		self::assertSame( '1.2.3', $updater->diagnostics()['offered_version'] );
+		self::assertNull( $updater->diagnostics()['offered_version'] );
+		self::assertArrayNotHasKey( 'offer', $this->nativeState( $updater ) );
 
+		unset( $_GET['force-check'] );
 		self::assertFalse(
 			$updater->filterUpdate(
 				false,
@@ -1767,7 +1788,8 @@ final class NativePluginUpdaterTest extends TestCase {
 		$updater->captureInstallPackageResult( array( 'destination_name' => 'example-plugin' ), $extra );
 		$updater->observeCompletion( null, $extra );
 		$updater->finalizePendingInstall();
-		self::assertSame( $nativeStateBeforeHandoff, $this->nativeState( $updater ) );
+		self::assertNotSame( array(), $nativeStateBeforeHandoff );
+		self::assertSame( array(), $this->nativeState( $updater ) );
 		self::assertFileDoesNotExist( $path );
 		$this->assertInstallFenceReleased( $updater );
 	}
@@ -2342,9 +2364,7 @@ final class NativePluginUpdaterTest extends TestCase {
 				)
 			);
 			$pending = $this->nativeState( $updater );
-			self::assertSame( 'available', $pending['status'] );
-			self::assertSame( '1.2.3', $pending['offer']['version'] );
-			self::assertArrayNotHasKey( 'current', $pending );
+			self::assertSame( array(), $pending );
 			self::assertSame( 'release_available', $updater->diagnostics()['code'] );
 			self::assertArrayHasKey( PHP_INT_MAX, WordPressState::$actions['shutdown'] );
 			$this->assertInstallFenceHeld( $updater );
@@ -2446,9 +2466,7 @@ final class NativePluginUpdaterTest extends TestCase {
 				)
 			);
 			$pending = $this->nativeState( $updater );
-			self::assertSame( 'available', $pending['status'] );
-			self::assertSame( '1.2.3', $pending['offer']['version'] );
-			self::assertArrayNotHasKey( 'current', $pending );
+			self::assertSame( array(), $pending );
 			self::assertSame( 'release_available', $updater->diagnostics()['code'] );
 			$this->assertInstallFenceHeld( $updater );
 		}

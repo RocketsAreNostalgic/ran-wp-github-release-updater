@@ -72,7 +72,7 @@ final class ReleaseCandidatePreflight {
 		$repositoryName = $target['repository'] ?? null;
 		$repositoryId   = $target['providerRepositoryId'] ?? null;
 		if ( ! is_string( $repositoryName )
-			|| ( null !== $repositoryId && ! is_string( $repositoryId ) )
+			|| ! is_string( $repositoryId )
 		) {
 			return self::invalidTarget();
 		}
@@ -404,14 +404,6 @@ final class ReleaseCandidatePreflight {
 		) {
 			$cached = array();
 		}
-		if ( ! $force && null !== $cacheRevision && is_array( $cached ) && self::CACHE_SCHEMA === ( $cached['schema'] ?? null )
-			&& is_int( $cached['checked_at'] ?? null ) && $this->now() - $cached['checked_at'] < $this->cacheDuration
-		) {
-			$result = CandidateValidation::fromArray( $cached['validation'] ?? array() );
-			if ( null !== $result ) {
-				return $result;
-			}
-		}
 		if ( ! $force
 			&& is_int( $cached['cooldown_until'] ?? null )
 			&& $cached['cooldown_until'] > $this->now()
@@ -427,6 +419,14 @@ final class ReleaseCandidatePreflight {
 					'cooldown_until' => $cached['cooldown_until'],
 				)
 			);
+		}
+		if ( ! $force && null !== $cacheRevision && is_array( $cached ) && self::CACHE_SCHEMA === ( $cached['schema'] ?? null )
+			&& is_int( $cached['checked_at'] ?? null ) && $this->now() - $cached['checked_at'] < $this->cacheDuration
+		) {
+			$result = CandidateValidation::fromArray( $cached['validation'] ?? array() );
+			if ( null !== $result ) {
+				return $result;
+			}
 		}
 
 		$claim = $this->operations->acquire(
@@ -449,7 +449,7 @@ final class ReleaseCandidatePreflight {
 			$query = $this->query();
 			$list  = $this->artifacts->listReleases( $query );
 			if ( $list instanceof \WP_Error ) {
-				$this->publishManagedFailure( $claim, $cached, $list->get_error_code(), self::FAILURE_COOLDOWN );
+					$this->publishManagedFailure( $claim, $list->get_error_code(), self::FAILURE_COOLDOWN );
 				return $list;
 			}
 			$renewed = $this->operations->renew(
@@ -463,7 +463,6 @@ final class ReleaseCandidatePreflight {
 			if ( $list->rateLimit()->isLimited() ) {
 				$this->publishManagedFailure(
 					$claim,
-					$cached,
 					'github_updater_rate_limited',
 					$list->rateLimit()->cooldownSeconds() ?? self::FAILURE_COOLDOWN
 				);
@@ -496,7 +495,6 @@ final class ReleaseCandidatePreflight {
 			if ( $selected instanceof \WP_Error ) {
 				$this->publishManagedFailure(
 					$claim,
-					$cached,
 					$selected->get_error_code(),
 					self::FAILURE_COOLDOWN
 				);
@@ -643,26 +641,26 @@ final class ReleaseCandidatePreflight {
 		return implode( "\0", array( $this->packageType, $this->packageRoot, $this->headerFile ) );
 	}
 
-	/** @param array<string, mixed> $cached */
 	private function publishManagedFailure(
 		?ReleaseOperationClaim &$claim,
-		array $cached,
 		string $code,
 		int $cooldown
 	): void {
 		if ( null === $claim ) {
 			return;
 		}
-		$cached['schema']         = self::CACHE_SCHEMA;
-		$cached['_cache_key']     = $this->cacheKey();
-		$cached['status']         = 'cooldown';
-		$cached['failed_at']      = $this->now();
-		$cached['cooldown_until'] = $this->now() + max( 1, min( 86400, $cooldown ) );
-		$cached['error_code']     = substr( sanitize_key( $code ), 0, 80 );
+		$failure = array(
+			'schema'         => self::CACHE_SCHEMA,
+			'_cache_key'     => $this->cacheKey(),
+			'status'         => 'cooldown',
+			'failed_at'      => $this->now(),
+			'cooldown_until' => $this->now() + max( 1, min( 86400, $cooldown ) ),
+			'error_code'     => substr( sanitize_key( $code ), 0, 80 ),
+		);
 		if ( true === $this->operations->publish(
 			$claim,
 			ReleaseOperationCoordinator::MANAGED_STATE,
-			$cached
+			$failure
 		) ) {
 			$claim = null;
 		}
