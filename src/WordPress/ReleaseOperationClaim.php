@@ -10,7 +10,10 @@ namespace RAN\WPGitHubReleaseUpdater\V1\WordPress;
  * @internal
  */
 final class ReleaseOperationClaim {
-	/** @param array<string, array<string, mixed>> $results */
+	/**
+	 * @param array<string, array<string, mixed>> $results
+	 * @param array<string, array<string, mixed>> $invalidatedResults
+	 */
 	public function __construct(
 		private string $table,
 		private string $name,
@@ -21,7 +24,8 @@ final class ReleaseOperationClaim {
 		private int $acquiredAt,
 		private int $expiresAt,
 		private array $results,
-		private string $raw
+		private string $raw,
+		private array $invalidatedResults = array()
 	) {
 	}
 
@@ -60,6 +64,11 @@ final class ReleaseOperationClaim {
 	/** @return array<string, array<string, mixed>> */
 	public function results(): array {
 		return $this->results;
+	}
+
+	/** @return array<string, array<string, mixed>> */
+	public function invalidatedResults(): array {
+		return $this->invalidatedResults;
 	}
 
 	public function raw(): string {

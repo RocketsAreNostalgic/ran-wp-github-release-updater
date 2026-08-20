@@ -187,6 +187,41 @@ final class ReleaseOperationCoordinatorTest extends TestCase {
 		self::assertSame( '', $row['operation'] );
 	}
 
+	public function testAffectedAcquisitionInvalidatesOnlyItsSlotAndReleaseCannotResurrectIt(): void {
+		$coordinator = $this->coordinator();
+		$target      = 'plugin\0example\0example.php';
+		$this->publishState( $coordinator, $target, ReleaseOperationCoordinator::MANAGED_STATE, array( 'managed' => true ) );
+		$this->publishState( $coordinator, $target, ReleaseOperationCoordinator::NATIVE_STATE, array( 'native' => true ) );
+
+		$claim = $coordinator->acquire( $target, 'native_discovery:refresh', 30 );
+		self::assertInstanceOf( ReleaseOperationClaim::class, $claim );
+		self::assertSame( array( 'native' => true ), $claim->invalidatedResults()[ ReleaseOperationCoordinator::NATIVE_STATE ] );
+		self::assertSame( array( 'managed' => true ), $coordinator->state( $target, ReleaseOperationCoordinator::MANAGED_STATE ) );
+		self::assertSame( array(), $coordinator->state( $target, ReleaseOperationCoordinator::NATIVE_STATE ) );
+
+		self::assertTrue( $coordinator->release( $claim ) );
+		self::assertSame( array( 'managed' => true ), $coordinator->state( $target, ReleaseOperationCoordinator::MANAGED_STATE ) );
+		self::assertSame( array(), $coordinator->state( $target, ReleaseOperationCoordinator::NATIVE_STATE ) );
+	}
+
+	public function testLostAffectedClaimCannotResurrectItsInvalidatedSlot(): void {
+		$coordinator = $this->coordinator();
+		$target      = 'plugin\0example\0example.php';
+		$this->publishState( $coordinator, $target, ReleaseOperationCoordinator::NATIVE_STATE, array( 'native' => true ) );
+		$stale = $coordinator->acquire( $target, 'native_install:42', 5 );
+		self::assertInstanceOf( ReleaseOperationClaim::class, $stale );
+
+		$database = $GLOBALS['wpdb'];
+		self::assertInstanceOf( FakeWpdb::class, $database );
+		$database->now += 6;
+		$winner         = $coordinator->acquire( $target, 'managed_preflight:takeover', 30 );
+		self::assertInstanceOf( ReleaseOperationClaim::class, $winner );
+
+		self::assertFalse( $coordinator->release( $stale ) );
+		self::assertSame( array(), $coordinator->state( $target, ReleaseOperationCoordinator::NATIVE_STATE ) );
+		self::assertTrue( $coordinator->release( $winner ) );
+	}
+
 	public function testExpiredOwnerCannotPublishOrReleaseAfterTakeover(): void {
 		$coordinator = $this->coordinator();
 		$stale       = $coordinator->acquire( 'theme\0example\0style.css', 'native_discovery', 5 );
@@ -292,5 +327,17 @@ final class ReleaseOperationCoordinatorTest extends TestCase {
 
 	private function coordinator(): ReleaseOperationCoordinator {
 		return new ReleaseOperationCoordinator();
+	}
+
+	/** @param array<string, mixed> $state */
+	private function publishState(
+		ReleaseOperationCoordinator $coordinator,
+		string $target,
+		string $slot,
+		array $state
+	): void {
+		$claim = $coordinator->acquire( $target, 'test_seed', 30 );
+		self::assertInstanceOf( ReleaseOperationClaim::class, $claim );
+		self::assertTrue( $coordinator->publish( $claim, $slot, $state ) );
 	}
 }

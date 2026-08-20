@@ -91,16 +91,23 @@ final class ReleaseOperationCoordinator {
 			} catch ( \Throwable ) {
 				return $this->error( 'entropy', 'A release-operation owner token could not be created.' );
 			}
-			$generation = $row['generation'] + 1;
-			$expiresAt  = $now + $ttl;
-			$next       = $this->encode(
+			$generation         = $row['generation'] + 1;
+			$expiresAt          = $now + $ttl;
+			$results            = $row['results'];
+			$invalidatedResults = array();
+			$affectedSlot       = self::affectedSlot( $operation );
+			if ( null !== $affectedSlot && isset( $results[ $affectedSlot ] ) ) {
+				$invalidatedResults[ $affectedSlot ] = $results[ $affectedSlot ];
+				unset( $results[ $affectedSlot ] );
+			}
+			$next = $this->encode(
 				$target,
 				$operation,
 				$owner,
 				$generation,
 				$now,
 				$expiresAt,
-				$row['results']
+				$results
 			);
 			if ( null === $next ) {
 				return $this->error( 'state_too_large', 'The release-operation state exceeds its fixed bound.' );
@@ -115,8 +122,9 @@ final class ReleaseOperationCoordinator {
 					$generation,
 					$now,
 					$expiresAt,
-					$row['results'],
-					$next
+					$results,
+					$next,
+					$invalidatedResults
 				);
 			}
 		}
@@ -164,7 +172,8 @@ final class ReleaseOperationCoordinator {
 			$claim->acquiredAt(),
 			$expiresAt,
 			$claim->results(),
-			$next
+			$next,
+			$claim->invalidatedResults()
 		);
 	}
 
@@ -410,6 +419,16 @@ final class ReleaseOperationCoordinator {
 
 	private function lost(): \WP_Error {
 		return $this->error( 'fence_lost', 'The release-operation ownership fence was lost.' );
+	}
+
+	private static function affectedSlot( string $operation ): ?string {
+		if ( str_starts_with( $operation, 'managed_preflight' ) ) {
+			return self::MANAGED_STATE;
+		}
+		if ( str_starts_with( $operation, 'native_' ) ) {
+			return self::NATIVE_STATE;
+		}
+		return null;
 	}
 
 	private function error( string $suffix, string $message ): \WP_Error {

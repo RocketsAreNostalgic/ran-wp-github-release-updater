@@ -1119,11 +1119,11 @@ final class NativePluginUpdater {
 		if ( $claim instanceof ReleaseOperationClaim && ! $stateCleared ) {
 			$this->operations->release( $claim );
 		}
-		$coreDeleted = delete_site_transient(
+		delete_site_transient(
 			'plugin' === $this->targetType ? 'update_plugins' : 'update_themes'
 		);
 
-		return $stateCleared || $coreDeleted;
+		return $stateCleared;
 	}
 
 	/**
@@ -1620,10 +1620,13 @@ final class NativePluginUpdater {
 	 * @return array<string, mixed>
 	 */
 	private function cachedState(): array {
-		$state = $this->operations->state(
-			$this->coordinationTargetKey(),
-			ReleaseOperationCoordinator::NATIVE_STATE
-		);
+		$claim = $this->activeDiscoveryClaim ?? $this->pendingOperationClaim;
+		$state = $claim instanceof ReleaseOperationClaim
+			? ( $claim->invalidatedResults()[ ReleaseOperationCoordinator::NATIVE_STATE ] ?? array() )
+			: $this->operations->state(
+				$this->coordinationTargetKey(),
+				ReleaseOperationCoordinator::NATIVE_STATE
+			);
 		return is_array( $state )
 			&& hash_equals( $this->cacheKey(), is_string( $state['_cache_key'] ?? null ) ? $state['_cache_key'] : '' )
 			&& self::CACHE_SCHEMA === ( $state['schema'] ?? null )
@@ -1633,7 +1636,7 @@ final class NativePluginUpdater {
 
 	/** @return array<string, mixed> */
 	private function nativeStateFromClaim( ReleaseOperationClaim $claim ): array {
-		$state = $claim->results()[ ReleaseOperationCoordinator::NATIVE_STATE ] ?? array();
+		$state = $claim->invalidatedResults()[ ReleaseOperationCoordinator::NATIVE_STATE ] ?? array();
 		return is_array( $state )
 			&& hash_equals( $this->cacheKey(), is_string( $state['_cache_key'] ?? null ) ? $state['_cache_key'] : '' )
 			&& self::CACHE_SCHEMA === ( $state['schema'] ?? null )
@@ -1704,7 +1707,6 @@ final class NativePluginUpdater {
 	): void {
 		$validationArray = $validation->toArray();
 		$priorState      = $this->cachedState();
-		$offer           = $this->validatedOffer( $priorState['offer'] ?? null );
 		$this->persistNativeState(
 			array(
 				'schema'               => self::CACHE_SCHEMA,
@@ -1713,7 +1715,6 @@ final class NativePluginUpdater {
 					? $priorState['checked_at']
 					: null,
 				'failed_at'            => $this->now(),
-				'offer'                => $offer,
 				'candidate'            => $candidate,
 				'candidate_validation' => $validationArray,
 				'conditional'          => $this->conditionalToArray(
@@ -1786,7 +1787,6 @@ final class NativePluginUpdater {
 	): void {
 		$normalizedCode  = substr( sanitize_key( $code ), 0, 80 );
 		$diagnosticState = $this->cachedState();
-		$offer           = $this->validatedOffer( $priorState['offer'] ?? null );
 		$checkedAt       = is_int( $priorState['checked_at'] ?? null )
 			? $priorState['checked_at']
 			: null;
@@ -1796,7 +1796,6 @@ final class NativePluginUpdater {
 				'status'      => 'unavailable',
 				'checked_at'  => $checkedAt,
 				'failed_at'   => $this->now(),
-				'offer'       => $offer,
 				'conditional' => $this->conditionalToArray(
 					$this->mergedConditional(
 						$conditional,
@@ -1817,7 +1816,7 @@ final class NativePluginUpdater {
 	}
 
 	/**
-	 * Persist a provider cooldown without discarding a still-bounded safe offer.
+	 * Persist a provider cooldown without retaining readiness-authorizing state.
 	 *
 	 * @param array<string, mixed> $priorState Last safe cached state.
 	 */
@@ -1827,7 +1826,6 @@ final class NativePluginUpdater {
 		int $cooldown
 	): void {
 		$cooldown = max( 1, min( 86400, $cooldown ) );
-		$offer    = $this->validatedOffer( $priorState['offer'] ?? null );
 		$repeats  = $this->diagnosticRepeats( $priorState, 'rate_limited' );
 		$state    = array(
 			'schema'         => self::CACHE_SCHEMA,
@@ -1837,7 +1835,6 @@ final class NativePluginUpdater {
 				: null,
 			'failed_at'      => $this->now(),
 			'cooldown_until' => $this->now() + $cooldown,
-			'offer'          => $offer,
 			'conditional'    => $this->conditionalToArray(
 				$this->mergedConditional(
 					$conditional,

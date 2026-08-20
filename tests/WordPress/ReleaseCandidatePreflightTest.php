@@ -67,6 +67,27 @@ final class ReleaseCandidatePreflightTest extends TestCase {
 		self::assertSame( 'github_updater_invalid_preflight_target', $result->get_error_code() );
 	}
 
+	public function testManagedFactoryRequiresStableRepositoryIdentity(): void {
+		$client = $this->clientWithOlderValidRelease();
+		$target = $this->managedTarget();
+
+		unset( $target['providerRepositoryId'] );
+		$missing = ReleaseCandidatePreflight::fromTarget( $target, $client );
+		self::assertInstanceOf( \WP_Error::class, $missing );
+		self::assertSame( 'github_updater_invalid_preflight_target', $missing->get_error_code() );
+
+		$target['providerRepositoryId'] = 'not-numeric';
+		$malformed                      = ReleaseCandidatePreflight::fromTarget( $target, $client );
+		self::assertInstanceOf( \WP_Error::class, $malformed );
+		self::assertSame( 'github_updater_invalid_preflight_target', $malformed->get_error_code() );
+
+		$target['providerRepositoryId'] = '123456789';
+		self::assertInstanceOf(
+			ReleaseCandidatePreflight::class,
+			ReleaseCandidatePreflight::fromTarget( $target, $client )
+		);
+	}
+
 	public function testProspectiveFactoryRequiresStableRepositoryIdentity(): void {
 		$target = array(
 			'repository'  => 'RocketsAreNostalgic/example-plugin',
@@ -190,6 +211,59 @@ final class ReleaseCandidatePreflightTest extends TestCase {
 		self::assertInstanceOf( \WP_Error::class, $cached );
 		self::assertSame( 'github_updater_rate_limited', $cached->get_error_code() );
 		self::assertSame( 2, $client->listCalls );
+	}
+
+	public function testManagedFailurePublishesCooldownWithoutResurrectingPriorReadiness(): void {
+		$client    = $this->clientWithOlderValidRelease();
+		$preflight = $this->preflight( $client );
+		self::assertInstanceOf( CandidateValidation::class, $preflight->check() );
+		$client->listError = new \WP_Error( 'github_updater_http_failed', 'Unavailable.' );
+
+		$failure = $preflight->check( true );
+		self::assertInstanceOf( \WP_Error::class, $failure );
+		$state = $this->managedState( $preflight );
+		self::assertSame( 'cooldown', $state['status'] );
+		self::assertArrayNotHasKey( 'validation', $state );
+
+		$client->listError = null;
+		$cached            = $preflight->check();
+		self::assertInstanceOf( \WP_Error::class, $cached );
+		self::assertSame( 'github_updater_http_failed', $cached->get_error_code() );
+		self::assertSame( 2, $client->listCalls );
+	}
+
+	public function testCooldownOutranksRetainedManagedValidation(): void {
+		$client    = $this->clientWithOlderValidRelease();
+		$preflight = $this->preflight( $client );
+		self::assertInstanceOf( CandidateValidation::class, $preflight->check() );
+		$state                   = $this->managedState( $preflight );
+		$state['status']         = 'cooldown';
+		$state['cooldown_until'] = 1300;
+		$state['error_code']     = 'github_updater_rate_limited';
+		$this->publishManagedState( $preflight, $state );
+
+		$result = $preflight->check();
+		self::assertInstanceOf( \WP_Error::class, $result );
+		self::assertSame( 'github_updater_rate_limited', $result->get_error_code() );
+		self::assertSame( 1, $client->listCalls );
+	}
+
+	public function testBusyFollowerCannotReuseReadinessInvalidatedByManagedOwner(): void {
+		$client    = $this->clientWithOlderValidRelease();
+		$preflight = $this->preflight( $client );
+		self::assertInstanceOf( CandidateValidation::class, $preflight->check() );
+		$coordinator = new ReleaseOperationCoordinator();
+		$claim       = $coordinator->acquire(
+			$this->coordinationTarget( $preflight ),
+			'managed_preflight:owner',
+			30
+		);
+		self::assertInstanceOf( ReleaseOperationClaim::class, $claim );
+
+		$follower = $preflight->check();
+		self::assertInstanceOf( \WP_Error::class, $follower );
+		self::assertSame( 'github_updater_check_in_progress', $follower->get_error_code() );
+		self::assertTrue( $coordinator->release( $claim ) );
 	}
 
 	public function testValidReleaseUsesCacheUnlessForceRequestsFreshValidation(): void {
@@ -479,22 +553,51 @@ final class ReleaseCandidatePreflightTest extends TestCase {
 	}
 
 	private function preflight( PreflightReleaseArtifactClient $client ): ReleaseCandidatePreflight {
-		$target = array(
-			'repository'    => 'RocketsAreNostalgic/example-plugin',
-			'pluginSlug'    => 'example-plugin',
-			'mainFile'      => 'example-plugin.php',
-			'channel'       => 'stable',
-			'accessToken'   => null,
-			'cacheDuration' => 21600,
-		);
-
 		$preflight = ReleaseCandidatePreflight::fromTarget(
-			$target,
+			$this->managedTarget(),
 			$client,
 			static fn (): int => 1000
 		);
 		self::assertInstanceOf( ReleaseCandidatePreflight::class, $preflight );
 		return $preflight;
+	}
+
+	/** @return array<string, mixed> */
+	private function managedTarget(): array {
+		return array(
+			'repository'           => 'RocketsAreNostalgic/example-plugin',
+			'providerRepositoryId' => '123456789',
+			'pluginSlug'           => 'example-plugin',
+			'mainFile'             => 'example-plugin.php',
+			'channel'              => 'stable',
+			'accessToken'          => null,
+			'cacheDuration'        => 21600,
+		);
+	}
+
+	/** @return array<string, mixed> */
+	private function managedState( ReleaseCandidatePreflight $preflight ): array {
+		return ( new ReleaseOperationCoordinator() )->state(
+			$this->coordinationTarget( $preflight ),
+			ReleaseOperationCoordinator::MANAGED_STATE
+		);
+	}
+
+	/** @param array<string, mixed> $state */
+	private function publishManagedState( ReleaseCandidatePreflight $preflight, array $state ): void {
+		$coordinator = new ReleaseOperationCoordinator();
+		$claim       = $coordinator->acquire( $this->coordinationTarget( $preflight ), 'test_seed', 30 );
+		self::assertInstanceOf( ReleaseOperationClaim::class, $claim );
+		self::assertTrue(
+			$coordinator->publish( $claim, ReleaseOperationCoordinator::MANAGED_STATE, $state )
+		);
+	}
+
+	private function coordinationTarget( ReleaseCandidatePreflight $preflight ): string {
+		$method = new \ReflectionMethod( ReleaseCandidatePreflight::class, 'coordinationTargetKey' );
+		$target = $method->invoke( $preflight );
+		self::assertIsString( $target );
+		return $target;
 	}
 
 	private function prospectivePreflight(
