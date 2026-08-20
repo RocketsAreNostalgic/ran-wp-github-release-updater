@@ -319,7 +319,7 @@ function installPublisherEnvironment(fixture, fetch) {
     "GITHUB_EVENT_PATH",
     "GITHUB_REPOSITORY",
     "GITHUB_TOKEN",
-    "RAN_RELEASE_PUBLISHER_IMMUTABLE_RELEASES_ACKNOWLEDGED",
+    "RAN_RELEASE_PUBLISHER_IMMUTABLE_RELEASES_ACKNOWLEDGED_REPOSITORY_ID",
     "RAN_RELEASE_PUBLISHER_MUTATE",
   ];
   const original = Object.fromEntries(
@@ -329,7 +329,8 @@ function installPublisherEnvironment(fixture, fetch) {
   process.env.GITHUB_EVENT_PATH = fixture.eventPath;
   process.env.GITHUB_REPOSITORY = REPOSITORY;
   process.env.GITHUB_TOKEN = "fixture-token";
-  process.env.RAN_RELEASE_PUBLISHER_IMMUTABLE_RELEASES_ACKNOWLEDGED = "1";
+  process.env.RAN_RELEASE_PUBLISHER_IMMUTABLE_RELEASES_ACKNOWLEDGED_REPOSITORY_ID =
+    String(REPOSITORY_ID);
   process.env.RAN_RELEASE_PUBLISHER_MUTATE = "1";
   return () => {
     globalThis.fetch = originalFetch;
@@ -730,7 +731,8 @@ test("runPublisher recovers a lost release acknowledgement only after exact read
   });
   assert.deepEqual(transport.state.labels, ["autorelease: pending"]);
 
-  delete process.env.RAN_RELEASE_PUBLISHER_IMMUTABLE_RELEASES_ACKNOWLEDGED;
+  delete process.env
+    .RAN_RELEASE_PUBLISHER_IMMUTABLE_RELEASES_ACKNOWLEDGED_REPOSITORY_ID;
   const result = await runPublisher(fixture.root);
   assert.equal(result.action, "reconcile_labels");
   assert.equal(result.releaseId, 9876);
@@ -789,16 +791,23 @@ test("runPublisher recovers a lost release acknowledgement only after exact read
   );
 });
 
-test("runPublisher refuses missing or non-literal immutable acknowledgement before any write", async (context) => {
+test("runPublisher refuses a missing or mismatched immutable repository acknowledgement before any write", async (context) => {
   const fixture = publisherRepositoryFixture();
   const transport = publisherTransport(fixture);
   context.after(installPublisherEnvironment(fixture, transport.fetch));
 
-  for (const acknowledgement of [undefined, "true", "0", " 1"]) {
+  for (const acknowledgement of [
+    undefined,
+    "1",
+    String(REPOSITORY_ID + 1),
+    ` ${REPOSITORY_ID} `,
+  ]) {
     if (acknowledgement === undefined) {
-      delete process.env.RAN_RELEASE_PUBLISHER_IMMUTABLE_RELEASES_ACKNOWLEDGED;
+      delete process.env
+        .RAN_RELEASE_PUBLISHER_IMMUTABLE_RELEASES_ACKNOWLEDGED_REPOSITORY_ID;
     } else {
-      process.env.RAN_RELEASE_PUBLISHER_IMMUTABLE_RELEASES_ACKNOWLEDGED =
+      process.env
+        .RAN_RELEASE_PUBLISHER_IMMUTABLE_RELEASES_ACKNOWLEDGED_REPOSITORY_ID =
         acknowledgement;
     }
     await assert.rejects(runPublisher(fixture.root), (error) => {

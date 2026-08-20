@@ -42,7 +42,7 @@ final class ReleaseWorkflowContractTest extends TestCase {
 		self::assertStringContainsString( 'fetch-depth: 0', $workflow );
 		self::assertStringContainsString( 'persist-credentials: false', $workflow );
 		self::assertStringContainsString( 'actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e', $workflow );
-		self::assertStringContainsString( 'RAN_RELEASE_PUBLISHER_IMMUTABLE_RELEASES_ACKNOWLEDGED: ${{ vars.RAN_RELEASE_PUBLISHER_IMMUTABLE_RELEASES_ACKNOWLEDGED }}', $workflow );
+		self::assertStringContainsString( 'RAN_RELEASE_PUBLISHER_IMMUTABLE_RELEASES_ACKNOWLEDGED_REPOSITORY_ID: ${{ vars.RAN_RELEASE_PUBLISHER_IMMUTABLE_RELEASES_ACKNOWLEDGED_REPOSITORY_ID }}', $workflow );
 		self::assertStringContainsString( 'RAN_RELEASE_PUBLISHER_MUTATE: "1"', $workflow );
 		self::assertStringContainsString( 'run: node scripts/release-publisher.mjs', $workflow );
 		self::assertMatchesRegularExpression( '/release:\R(?:.*\R){0,14}\s+permissions:\R\s+contents: write\R\s+issues: write\R\s+pull-requests: write/', $workflow );
