@@ -239,6 +239,7 @@ function publisherTransport(fixture, options = {}) {
   const state = {
     labels: ["autorelease: pending"],
     loseAcknowledgement: options.loseAcknowledgement ?? false,
+    postCreateImmutable: options.postCreateImmutable ?? true,
     release: null,
     tagRef: null,
   };
@@ -269,11 +270,6 @@ function publisherTransport(fixture, options = {}) {
         ? response(null, 404)
         : response(state.release);
     }
-    if (method === "GET" && pathname === `${prefix}/immutable-releases`) {
-      return options.immutable404
-        ? response(null, 404)
-        : response({ enabled: true });
-    }
     if (method === "POST" && pathname === `${prefix}/releases`) {
       state.tagRef = {
         object: { sha: fixture.candidateSha, type: "commit" },
@@ -284,7 +280,7 @@ function publisherTransport(fixture, options = {}) {
         body: fixture.identity.notes,
         draft: false,
         id: 9876,
-        immutable: true,
+        immutable: state.postCreateImmutable,
         name: fixture.identity.tag,
         prerelease: true,
         tag_name: fixture.identity.tag,
@@ -323,6 +319,7 @@ function installPublisherEnvironment(fixture, fetch) {
     "GITHUB_EVENT_PATH",
     "GITHUB_REPOSITORY",
     "GITHUB_TOKEN",
+    "RAN_RELEASE_PUBLISHER_IMMUTABLE_RELEASES_ACKNOWLEDGED",
     "RAN_RELEASE_PUBLISHER_MUTATE",
   ];
   const original = Object.fromEntries(
@@ -332,6 +329,7 @@ function installPublisherEnvironment(fixture, fetch) {
   process.env.GITHUB_EVENT_PATH = fixture.eventPath;
   process.env.GITHUB_REPOSITORY = REPOSITORY;
   process.env.GITHUB_TOKEN = "fixture-token";
+  process.env.RAN_RELEASE_PUBLISHER_IMMUTABLE_RELEASES_ACKNOWLEDGED = "1";
   process.env.RAN_RELEASE_PUBLISHER_MUTATE = "1";
   return () => {
     globalThis.fetch = originalFetch;
@@ -689,9 +687,6 @@ test("runPublisher publishes once and reads exact immutable state before labels"
     ).length,
     0,
   );
-  const immutable = calls.findIndex((call) =>
-    call.pathname.endsWith("/immutable-releases"),
-  );
   const labelWrite = calls.findIndex(
     (call) =>
       call.method !== "GET" && call.pathname.includes("/issues/12/labels"),
@@ -711,7 +706,12 @@ test("runPublisher publishes once and reads exact immutable state before labels"
   const finalPullReadback = calls.findIndex((call) =>
     call.pathname.endsWith("/pulls/12"),
   );
-  assert.ok(immutable >= 0 && immutable < releasePosts[0].index);
+  assert.equal(
+    calls.filter((call) =>
+      call.pathname.endsWith("/immutable-releases"),
+    ).length,
+    0,
+  );
   assert.ok(tagReadback > releasePosts[0].index && tagReadback < labelWrite);
   assert.ok(
     releaseReadback > releasePosts[0].index && releaseReadback < labelWrite,
@@ -730,6 +730,7 @@ test("runPublisher recovers a lost release acknowledgement only after exact read
   });
   assert.deepEqual(transport.state.labels, ["autorelease: pending"]);
 
+  delete process.env.RAN_RELEASE_PUBLISHER_IMMUTABLE_RELEASES_ACKNOWLEDGED;
   const result = await runPublisher(fixture.root);
   assert.equal(result.action, "reconcile_labels");
   assert.equal(result.releaseId, 9876);
@@ -757,9 +758,6 @@ test("runPublisher recovers a lost release acknowledgement only after exact read
     ).length,
     0,
   );
-  const immutable = calls.findIndex((call) =>
-    call.pathname.endsWith("/immutable-releases"),
-  );
   const labelWrite = calls.findIndex(
     (call) =>
       call.method !== "GET" && call.pathname.includes("/issues/12/labels"),
@@ -776,7 +774,12 @@ test("runPublisher recovers a lost release acknowledgement only after exact read
       call.method === "GET" &&
       call.pathname.includes("/releases/tags/"),
   );
-  assert.ok(immutable >= 0 && immutable < releasePosts[0].index);
+  assert.equal(
+    calls.filter((call) =>
+      call.pathname.endsWith("/immutable-releases"),
+    ).length,
+    0,
+  );
   assert.ok(tagReadback > releasePosts[0].index && tagReadback < labelWrite);
   assert.ok(
     releaseReadback > releasePosts[0].index && releaseReadback < labelWrite,
@@ -786,17 +789,57 @@ test("runPublisher recovers a lost release acknowledgement only after exact read
   );
 });
 
-test("runPublisher refuses disabled immutable releases before any write", async (context) => {
+test("runPublisher refuses missing or non-literal immutable acknowledgement before any write", async (context) => {
   const fixture = publisherRepositoryFixture();
-  const transport = publisherTransport(fixture, { immutable404: true });
+  const transport = publisherTransport(fixture);
+  context.after(installPublisherEnvironment(fixture, transport.fetch));
+
+  for (const acknowledgement of [undefined, "true", "0", " 1"]) {
+    if (acknowledgement === undefined) {
+      delete process.env.RAN_RELEASE_PUBLISHER_IMMUTABLE_RELEASES_ACKNOWLEDGED;
+    } else {
+      process.env.RAN_RELEASE_PUBLISHER_IMMUTABLE_RELEASES_ACKNOWLEDGED =
+        acknowledgement;
+    }
+    await assert.rejects(runPublisher(fixture.root), (error) => {
+      assert.equal(error.code, "immutable_releases_disabled");
+      return true;
+    });
+  }
+  assert.equal(
+    transport.calls.filter((call) => call.method !== "GET").length,
+    0,
+  );
+  assert.equal(
+    transport.calls.filter((call) =>
+      call.pathname.endsWith("/immutable-releases"),
+    ).length,
+    0,
+  );
+});
+
+test("runPublisher refuses a mutable post-create release before labels", async (context) => {
+  const fixture = publisherRepositoryFixture();
+  const transport = publisherTransport(fixture, { postCreateImmutable: false });
   context.after(installPublisherEnvironment(fixture, transport.fetch));
 
   await assert.rejects(runPublisher(fixture.root), (error) => {
-    assert.equal(error.code, "immutable_releases_disabled");
+    assert.equal(error.code, "release_state_conflict");
     return true;
   });
+  assert.deepEqual(transport.state.labels, ["autorelease: pending"]);
   assert.equal(
-    transport.calls.filter((call) => call.method !== "GET").length,
+    transport.calls.filter(
+      (call) =>
+        call.method !== "GET" &&
+        call.pathname.includes("/issues/12/labels"),
+    ).length,
+    0,
+  );
+  assert.equal(
+    transport.calls.filter((call) =>
+      call.pathname.endsWith("/immutable-releases"),
+    ).length,
     0,
   );
 });
