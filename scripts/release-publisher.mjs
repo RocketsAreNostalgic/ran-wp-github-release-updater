@@ -494,23 +494,6 @@ async function remoteState(repository, tag) {
   return { release: release.data, tagRef: tagRef.data };
 }
 
-async function immutableReleasesEnabled(repository) {
-  const response = await api(`/repos/${repository}/immutable-releases`, {
-    allow404: true,
-    apiVersion: IMMUTABLE_RELEASES_API_VERSION,
-  });
-  if (response.data === null) {
-    return false;
-  }
-  if (typeof response.data?.enabled !== "boolean") {
-    refuse(
-      "immutable_release_readback_invalid",
-      "repository immutable-release state is missing",
-    );
-  }
-  return response.data.enabled;
-}
-
 function git(root, args) {
   return execFileSync("git", args, {
     cwd: root,
@@ -695,7 +678,8 @@ export async function runPublisher(root = process.cwd()) {
     commit: freshLocal.commit,
     immutableReleasesEnabled:
       freshState.release === null
-        ? await immutableReleasesEnabled(repository)
+        ? process.env.RAN_RELEASE_PUBLISHER_IMMUTABLE_RELEASES_ACKNOWLEDGED ===
+          "1"
         : undefined,
     mainSha: freshMain.data?.object?.sha,
     pulls: freshLocal.pulls,

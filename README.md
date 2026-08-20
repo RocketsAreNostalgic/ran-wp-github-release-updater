@@ -438,6 +438,12 @@ the repository publisher creates and reads back the tag and immutable GitHub
 source release with no uploaded asset; neither owner builds or uploads a
 consumer's ZIP.
 
+Repository admins enable immutable releases, then set the Actions variable
+`RAN_RELEASE_PUBLISHER_IMMUTABLE_RELEASES_ACKNOWLEDGED` to literal `1`. The
+acknowledgement authorizes only the creation attempt: exact post-create immutable
+readback remains the publication authority, and recovery of an existing exact
+release does not depend on the variable.
+
 Publish exactly one uploaded `.zip` asset on the GitHub Release:
 
 ```text
