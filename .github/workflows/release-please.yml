@@ -48,6 +48,6 @@ jobs:
       - name: Publish only the exact eligible merge and read it back
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RAN_RELEASE_PUBLISHER_IMMUTABLE_RELEASES_ACKNOWLEDGED: ${{ vars.RAN_RELEASE_PUBLISHER_IMMUTABLE_RELEASES_ACKNOWLEDGED }}
+          RAN_RELEASE_PUBLISHER_IMMUTABLE_RELEASES_ACKNOWLEDGED_REPOSITORY_ID: ${{ vars.RAN_RELEASE_PUBLISHER_IMMUTABLE_RELEASES_ACKNOWLEDGED_REPOSITORY_ID }}
           RAN_RELEASE_PUBLISHER_MUTATE: "1"
         run: node scripts/release-publisher.mjs

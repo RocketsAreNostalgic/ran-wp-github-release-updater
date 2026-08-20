@@ -678,8 +678,9 @@ export async function runPublisher(root = process.cwd()) {
     commit: freshLocal.commit,
     immutableReleasesEnabled:
       freshState.release === null
-        ? process.env.RAN_RELEASE_PUBLISHER_IMMUTABLE_RELEASES_ACKNOWLEDGED ===
-          "1"
+        ? process.env
+            .RAN_RELEASE_PUBLISHER_IMMUTABLE_RELEASES_ACKNOWLEDGED_REPOSITORY_ID ===
+          String(repositoryId)
         : undefined,
     mainSha: freshMain.data?.object?.sha,
     pulls: freshLocal.pulls,
