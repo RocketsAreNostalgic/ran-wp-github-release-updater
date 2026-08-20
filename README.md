@@ -96,7 +96,7 @@ consumer repository.
 ```sh
 composer config repositories.ran-wp-github-release-updater vcs \
 	https://github.com/RocketsAreNostalgic/ran-wp-github-release-updater.git
-composer require ran/wp-github-release-updater:^1.0@beta
+composer require ran/wp-github-release-updater:^2.0@beta
 ```
 
 The package intentionally declares no production Composer autoload mapping.
@@ -140,7 +140,10 @@ rejected as `inactive / late_registration` for the current request. A theme's
 `functions.php` loads after `plugins_loaded`, so a theme still cannot
 self-register. Inactive themes do not execute and cannot self-register.
 `register()` is idempotent and `diagnostics()` is passive: it does not make a
-remote request.
+remote request. At declaration time, only the returned bootstrap facade is
+available. Runtime classes under `RAN\WPGitHubReleaseUpdater\V1` are available
+only after the selected runtime has run at `plugins_loaded`; defer their use to
+a callback at `PHP_INT_MAX`.
 
 Set `nativeDiscovery: false` when a consumer must still participate in shared
 runtime arbitration but must not create a native update target. The target
@@ -256,17 +259,25 @@ illegal-state lifecycle defect, duplicated cleanup or a second independently
 changing install lifecycle.
 
 ```php
-$preflight = ReleaseCandidatePreflight::fromTarget( array(
-	'repository' => 'RocketsAreNostalgic/example-plugin',
-	'providerRepositoryId' => '123456789',
-	'pluginSlug' => 'example-plugin',
-	'mainFile' => 'example-plugin.php',
-	'channel' => 'stable',
-	'accessToken' => static fn (): ?string => getenv( 'RAN_GITHUB_TOKEN' ) ?: null,
-	'packageType' => 'plugin',
-) );
+use RAN\WPGitHubReleaseUpdater\V1\WordPress\ReleaseCandidatePreflight;
 
-$validation = is_wp_error( $preflight ) ? $preflight : $preflight->check();
+add_action( 'plugins_loaded', static function (): void {
+	if ( ! class_exists( ReleaseCandidatePreflight::class, false ) ) {
+		return;
+	}
+
+	$preflight = ReleaseCandidatePreflight::fromTarget( array(
+		'repository' => 'RocketsAreNostalgic/example-plugin',
+		'providerRepositoryId' => '123456789',
+		'pluginSlug' => 'example-plugin',
+		'mainFile' => 'example-plugin.php',
+		'channel' => 'stable',
+		'accessToken' => static fn (): ?string => getenv( 'RAN_GITHUB_TOKEN' ) ?: null,
+		'packageType' => 'plugin',
+	) );
+
+	$validation = is_wp_error( $preflight ) ? $preflight : $preflight->check();
+}, PHP_INT_MAX );
 ```
 
 For a theme use `packageType => 'theme'`, `themeRoot => 'example-theme'`, and
@@ -284,27 +295,35 @@ The selected runtime advertises this strict custody contract as
 `ReleaseCandidatePreflight::PROSPECTIVE_API_VERSION === 4`.
 
 ```php
-$preflight = ReleaseCandidatePreflight::fromProspectiveTarget( array(
-	'repository' => 'RocketsAreNostalgic/example-plugin',
-	'providerRepositoryId' => '123456789',
-	'channel' => 'stable',
-	'accessToken' => static fn (): ?string => getenv( 'RAN_GITHUB_TOKEN' ) ?: null,
-	'packageType' => 'plugin',
-) );
+use RAN\WPGitHubReleaseUpdater\V1\WordPress\ReleaseCandidatePreflight;
 
-$candidates = is_wp_error( $preflight ) ? $preflight : $preflight->listCandidates();
-$selected = is_wp_error( $candidates ) ? $candidates : $candidates[0];
-$inspection = is_wp_error( $selected )
-	? $selected
-	: $preflight->inspectExact( $selected->releaseId(), $selected->tag() );
+add_action( 'plugins_loaded', static function (): void {
+	if ( ! class_exists( ReleaseCandidatePreflight::class, false ) ) {
+		return;
+	}
 
-$artifact = is_wp_error( $inspection )
-	? $inspection
-	: $preflight->acquireExact(
-		$selected->releaseId(),
-		$selected->tag(),
-		$inspection->fingerprint()
-	);
+	$preflight = ReleaseCandidatePreflight::fromProspectiveTarget( array(
+		'repository' => 'RocketsAreNostalgic/example-plugin',
+		'providerRepositoryId' => '123456789',
+		'channel' => 'stable',
+		'accessToken' => static fn (): ?string => getenv( 'RAN_GITHUB_TOKEN' ) ?: null,
+		'packageType' => 'plugin',
+	) );
+
+	$candidates = is_wp_error( $preflight ) ? $preflight : $preflight->listCandidates();
+	$selected = is_wp_error( $candidates ) ? $candidates : $candidates[0];
+	$inspection = is_wp_error( $selected )
+		? $selected
+		: $preflight->inspectExact( $selected->releaseId(), $selected->tag() );
+
+	$artifact = is_wp_error( $inspection )
+		? $inspection
+		: $preflight->acquireExact(
+			$selected->releaseId(),
+			$selected->tag(),
+			$inspection->fingerprint()
+		);
+}, PHP_INT_MAX );
 ```
 
 `listCandidates()` returns up to eight semantically ordered, channel-eligible
@@ -362,6 +381,7 @@ path and the native installed stylesheet identity:
 $updater = $createUpdater(
 	pluginFile: get_theme_root() . '/locally-renamed-theme/style.css',
 	repository: 'RocketsAreNostalgic/example-theme',
+	providerRepositoryId: '987654321',
 	pluginSlug: 'example-theme',
 	autoUpdatePolicy: 'manual',
 	targetType: 'theme',
