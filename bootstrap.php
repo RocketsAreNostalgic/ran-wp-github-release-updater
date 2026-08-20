@@ -154,6 +154,11 @@ if ( ! $ran_wp_github_release_updater_broker_is_compatible ) {
 		private int $targetSequence = 0;
 
 		/**
+		 * Whether this request has registered its one bootstrap-owned load failure notice.
+		 */
+		private bool $runtimeLoadFailureNoticeRegistered = false;
+
+		/**
 		 * Create the request-local broker and defer selection.
 		 */
 		public function __construct() {
@@ -401,7 +406,73 @@ if ( ! $ran_wp_github_release_updater_broker_is_compatible ) {
 			} catch ( Throwable ) {
 				$this->selectedVersion = null;
 				$this->markTargetIds( $runtimeTargetIds, 'runtime_load_failed', 'inactive' );
+				$this->registerRuntimeLoadFailureNotices( $runtimeTargetIds );
 			}
+		}
+
+		/**
+		 * Register one generic, request-local notice for all failed plain targets.
+		 *
+		 * The selected runtime is unavailable, so this must not depend on runtime
+		 * helpers or expose target configuration in the admin surface.
+		 *
+		 * @param list<string> $registrationIds Failed target registration IDs.
+		 */
+		private function registerRuntimeLoadFailureNotices( array $registrationIds ): void {
+			if ( ! function_exists( 'add_action' ) ) {
+				return;
+			}
+
+			$targetTypes = array();
+			foreach ( $registrationIds as $registrationId ) {
+				$target = $this->targets[ $registrationId ] ?? null;
+				if ( ! is_array( $target ) ) {
+					continue;
+				}
+
+				$targetType                 = 'theme' === ( $target['targetType'] ?? null )
+					? 'theme'
+					: 'plugin';
+				$targetTypes[ $targetType ] = true;
+			}
+			if ( array() === $targetTypes || $this->runtimeLoadFailureNoticeRegistered ) {
+				return;
+			}
+
+			$this->runtimeLoadFailureNoticeRegistered = true;
+			$rendered                                 = false;
+			$renderer                                 = static function () use ( $targetTypes, &$rendered ): void {
+				if ( $rendered ) {
+					return;
+				}
+
+				$screen = function_exists( 'get_current_screen' ) ? get_current_screen() : null;
+				$base   = is_object( $screen ) && is_string( $screen->base ?? null )
+					? $screen->base
+					: '';
+				if ( str_ends_with( $base, '-network' )
+					&& ( ! function_exists( 'is_multisite' ) || ! is_multisite() ) ) {
+					return;
+				}
+
+				foreach ( array_keys( $targetTypes ) as $targetType ) {
+					$allowed = 'theme' === $targetType
+						? array( 'themes', 'themes-network', 'update-core', 'update-core-network' )
+						: array( 'plugins', 'plugins-network', 'update-core', 'update-core-network' );
+					if ( current_user_can( 'theme' === $targetType ? 'update_themes' : 'update_plugins' )
+						&& in_array( $base, $allowed, true ) ) {
+						$rendered = true;
+						echo '<div class="notice notice-error"><p>'
+							. esc_html( 'A configured package could not load its GitHub release updater.' )
+							. ' ' . esc_html( 'Review the package update configuration and reload this screen.' )
+							. '</p></div>';
+						return;
+					}
+				}
+			};
+
+			add_action( 'admin_notices', $renderer );
+			add_action( 'network_admin_notices', $renderer );
 		}
 
 		/**
