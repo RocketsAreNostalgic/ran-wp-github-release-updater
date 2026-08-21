@@ -329,6 +329,9 @@ add_action( 'plugins_loaded', static function (): void {
 
 ### Prospective first-install custody
 
+The selected runtime advertises this custody protocol as
+`ReleaseCandidatePreflight::PROSPECTIVE_API_VERSION === 4`.
+
 For a prospective first installation, create the preflight with the same target
 configuration on both the review and installation requests:
 
@@ -342,6 +345,10 @@ $preflight = ReleaseCandidatePreflight::fromProspectiveTarget( array(
 	'accessToken' => null,
 	'packageType' => 'plugin',
 ) );
+
+if ( is_wp_error( $preflight ) ) {
+	return;
+}
 ```
 
 On the review request, list the bounded candidates and inspect the selected
@@ -349,29 +356,39 @@ release ZIP. Every call can return `WP_Error` and must be checked:
 
 ```php
 $candidates = $preflight->listCandidates();
-if ( is_wp_error( $candidates ) ) {
-	$inspection = $candidates;
-} else {
-	$selected = $candidates[0] ?? null;
-	$inspection = null === $selected
-		? new WP_Error( 'no_candidate', 'No release candidate was selected.' )
-		: $preflight->inspectExact( $selected->releaseId(), $selected->tag() );
+if ( is_wp_error( $candidates ) || ! isset( $candidates[0] ) ) {
+	return;
 }
 
-if ( ! is_wp_error( $inspection ) ) {
-	$approvedRelease = array(
-		'release_id' => $inspection->releaseId(),
-		'tag' => $inspection->tag(),
-		'fingerprint' => $inspection->fingerprint()->value(),
-	);
-	// Persist these bounded values with the authorised install request.
+$selected = $candidates[0];
+$inspection = $preflight->inspectExact( $selected->releaseId(), $selected->tag() );
+if ( is_wp_error( $inspection ) ) {
+	return;
 }
+
+$approvedRelease = array(
+	'release_id' => $inspection->releaseId(),
+	'tag' => $inspection->tag(),
+	'fingerprint' => $inspection->fingerprint()->value(),
+);
+// Persist these bounded values with the authorized install request.
 ```
 
-On the separately authorised installation request, parse the stored fingerprint
-and freshly acquire that exact release:
+On the separately authorized installation request, recreate and validate the
+preflight, validate the stored scalar types, parse the fingerprint, and freshly
+acquire that exact release:
 
 ```php
+if (
+	is_wp_error( $preflight )
+	|| ! is_array( $approvedRelease )
+	|| ! is_int( $approvedRelease['release_id'] ?? null )
+	|| ! is_string( $approvedRelease['tag'] ?? null )
+	|| ! is_string( $approvedRelease['fingerprint'] ?? null )
+) {
+	return;
+}
+
 $fingerprint = ReleaseFingerprint::fromString( $approvedRelease['fingerprint'] );
 $artifact = is_wp_error( $fingerprint )
 	? $fingerprint
@@ -386,7 +403,7 @@ if ( ! is_wp_error( $artifact ) ) {
 	if ( is_wp_error( $claim ) ) {
 		$artifact->discard();
 	} else {
-		// Pass $claim->path() immediately to the authorised WordPress install flow.
+		// Pass $claim->path() immediately to the authorized WordPress install flow.
 	}
 }
 ```
