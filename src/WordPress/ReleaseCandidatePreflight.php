@@ -420,7 +420,7 @@ final class ReleaseCandidatePreflight {
 				)
 			);
 		}
-		if ( ! $force && null !== $cacheRevision && is_array( $cached ) && self::CACHE_SCHEMA === ( $cached['schema'] ?? null )
+		if ( ! $force && null !== $cacheRevision && self::CACHE_SCHEMA === ( $cached['schema'] ?? null )
 			&& is_int( $cached['checked_at'] ?? null ) && $this->now() - $cached['checked_at'] < $this->cacheDuration
 		) {
 			$result = CandidateValidation::fromArray( $cached['validation'] ?? array() );
@@ -449,7 +449,7 @@ final class ReleaseCandidatePreflight {
 			$query = $this->query();
 			$list  = $this->artifacts->listReleases( $query );
 			if ( $list instanceof \WP_Error ) {
-					$this->publishManagedFailure( $claim, $list->get_error_code(), self::FAILURE_COOLDOWN );
+				$this->publishManagedFailure( $claim, self::errorCode( $list ), self::FAILURE_COOLDOWN );
 				return $list;
 			}
 			$renewed = $this->operations->renew(
@@ -495,7 +495,7 @@ final class ReleaseCandidatePreflight {
 			if ( $selected instanceof \WP_Error ) {
 				$this->publishManagedFailure(
 					$claim,
-					$selected->get_error_code(),
+					self::errorCode( $selected ),
 					self::FAILURE_COOLDOWN
 				);
 				return $selected;
@@ -668,6 +668,13 @@ final class ReleaseCandidatePreflight {
 
 	private function now(): int {
 		return ( $this->clock )();
+	}
+
+	private static function errorCode( \WP_Error $error ): string {
+		$code = $error->get_error_code();
+		return is_string( $code ) && '' !== $code
+			? $code
+			: 'github_updater_error';
 	}
 
 	private static function invalidTarget(): \WP_Error {
