@@ -297,10 +297,10 @@ archive contents, or filesystem paths.
 The bootstrap facade is the normal plugin and theme integration surface.
 Deployment controllers can instead use the public WordPress-facing preflight
 APIs for installed-package checks, first-install inspection and acquisition,
-artifact custody, coordination leases, cache invalidation, and request budgets.
-These runtime classes must be used from a callback at `PHP_INT_MAX`; classes
-under `src/Artifact` are internal and should not be constructed or introspected
-by consumers.
+artifact custody, and coordination. These operations use fixed internal request
+budgets. The runtime classes must be used from a callback at `PHP_INT_MAX`;
+classes under `src/Artifact` are internal and should not be constructed or
+introspected by consumers.
 
 For an installed package, create the preflight only after the selected runtime
 has loaded:
@@ -327,13 +327,75 @@ add_action( 'plugins_loaded', static function (): void {
 }, PHP_INT_MAX );
 ```
 
-For a prospective first installation, use
-`ReleaseCandidatePreflight::fromProspectiveTarget()`, then
-`listCandidates()`, `inspectExact()`, and `acquireExact()` in that order. The
-inspection fingerprint binds acquisition to the exact reviewed release and ZIP;
-the deliberate second download prevents display-time bytes from becoming
-installation custody. The returned artifact must be discarded or handed to
-WordPress Core exactly once.
+### Prospective first-install custody
+
+For a prospective first installation, create the preflight with the same target
+configuration on both the review and installation requests:
+
+```php
+use RAN\WPGitHubReleaseUpdater\V1\WordPress\ReleaseFingerprint;
+
+$preflight = ReleaseCandidatePreflight::fromProspectiveTarget( array(
+	'repository' => 'RocketsAreNostalgic/example-plugin',
+	'providerRepositoryId' => '123456789',
+	'channel' => 'stable',
+	'accessToken' => null,
+	'packageType' => 'plugin',
+) );
+```
+
+On the review request, list the bounded candidates and inspect the selected
+release ZIP. Every call can return `WP_Error` and must be checked:
+
+```php
+$candidates = $preflight->listCandidates();
+if ( is_wp_error( $candidates ) ) {
+	$inspection = $candidates;
+} else {
+	$selected = $candidates[0] ?? null;
+	$inspection = null === $selected
+		? new WP_Error( 'no_candidate', 'No release candidate was selected.' )
+		: $preflight->inspectExact( $selected->releaseId(), $selected->tag() );
+}
+
+if ( ! is_wp_error( $inspection ) ) {
+	$approvedRelease = array(
+		'release_id' => $inspection->releaseId(),
+		'tag' => $inspection->tag(),
+		'fingerprint' => $inspection->fingerprint()->value(),
+	);
+	// Persist these bounded values with the authorised install request.
+}
+```
+
+On the separately authorised installation request, parse the stored fingerprint
+and freshly acquire that exact release:
+
+```php
+$fingerprint = ReleaseFingerprint::fromString( $approvedRelease['fingerprint'] );
+$artifact = is_wp_error( $fingerprint )
+	? $fingerprint
+	: $preflight->acquireExact(
+		$approvedRelease['release_id'],
+		$approvedRelease['tag'],
+		$fingerprint
+	);
+
+if ( ! is_wp_error( $artifact ) ) {
+	$claim = $artifact->handoffToCore();
+	if ( is_wp_error( $claim ) ) {
+		$artifact->discard();
+	} else {
+		// Pass $claim->path() immediately to the authorised WordPress install flow.
+	}
+}
+```
+
+Inspection downloads, validates, and discards its ZIP. Acquisition downloads
+again and rejects any change to the release, commit, asset, digest, or package
+identity. A retained artifact must be `discard()`ed or handed to Core exactly
+once. After a successful handoff, the claim owns cleanup and must itself be
+discarded if Core does not consume it.
 
 The [release assurance extension](docs/release-assurance-extension.md) defines
 the single optional, request-local, rejection-only assurance checker. It can add
