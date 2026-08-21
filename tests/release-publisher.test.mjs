@@ -175,7 +175,7 @@ function writeSources(root, sources) {
   }
 }
 
-function publisherRepositoryFixture() {
+function publisherRepositoryFixture(options = {}) {
   const root = mkdtempSync(join(tmpdir(), "updater-publisher-"));
   gitRun(root, ["init", "--initial-branch=main"]);
   gitRun(root, ["config", "user.email", "publisher@example.test"]);
@@ -192,13 +192,18 @@ function publisherRepositoryFixture() {
   const headSha = gitRun(root, ["rev-parse", "HEAD"]);
   const headTree = gitRun(root, ["show", "--no-patch", "--format=%T", "HEAD"]);
   gitRun(root, ["checkout", "main"]);
-  gitRun(root, [
-    "merge",
-    "--no-ff",
-    "release-candidate",
-    "-m",
-    "release beta.5",
-  ]);
+  if (options.normalMerge ?? true) {
+    gitRun(root, [
+      "merge",
+      "--no-ff",
+      "release-candidate",
+      "-m",
+      "release beta.5",
+    ]);
+  } else {
+    gitRun(root, ["merge", "--squash", "release-candidate"]);
+    gitRun(root, ["commit", "-m", "release beta.5"]);
+  }
   const candidateSha = gitRun(root, ["rev-parse", "HEAD"]);
   const eventPath = join(root, "event.json");
   writeFileSync(
@@ -256,9 +261,17 @@ function publisherTransport(fixture, options = {}) {
       method === "GET" &&
       pathname.includes(`/commits/${fixture.candidateSha}/pulls`)
     ) {
-      return response([
-        { ...fixture.pull, labels: state.labels.map((name) => ({ name })) },
-      ]);
+      return response(
+        options.associatedPulls ?? [
+          { ...fixture.pull, labels: state.labels.map((name) => ({ name })) },
+        ],
+      );
+    }
+    if (method === "GET" && pathname.includes("/git/commits/")) {
+      return response({
+        sha: fixture.pull.head.sha,
+        tree: { sha: options.remoteHeadTree ?? fixture.pull.head_tree_sha },
+      });
     }
     if (method === "GET" && pathname.includes("/git/ref/tags/")) {
       return state.tagRef === null
@@ -718,6 +731,70 @@ test("runPublisher publishes once and reads exact immutable state before labels"
     releaseReadback > releasePosts[0].index && releaseReadback < labelWrite,
   );
   assert.ok(finalPullReadback > labelWrite);
+  assert.equal(
+    calls.filter((call) => call.pathname.includes("/git/commits/")).length,
+    3,
+  );
+});
+
+test("runPublisher refuses a one-parent Release Please candidate without writes", async (context) => {
+  const fixture = publisherRepositoryFixture({ normalMerge: false });
+  const transport = publisherTransport(fixture);
+  context.after(installPublisherEnvironment(fixture, transport.fetch));
+
+  await assert.rejects(runPublisher(fixture.root), (error) => {
+    assert.equal(error.code, "release_pr_not_normal_merge");
+    return true;
+  });
+  assert.equal(transport.calls.filter((call) => call.method !== "GET").length, 0);
+});
+
+test("runPublisher fails closed when the remote Release Please head tree is malformed", async (context) => {
+  const fixture = publisherRepositoryFixture();
+  const transport = publisherTransport(fixture, { remoteHeadTree: "not-a-sha" });
+  context.after(installPublisherEnvironment(fixture, transport.fetch));
+
+  await assert.rejects(runPublisher(fixture.root), (error) => {
+    assert.equal(error.code, "release_pr_head_tree_invalid");
+    return true;
+  });
+  assert.equal(transport.calls.filter((call) => call.method !== "GET").length, 0);
+});
+
+test("runPublisher does not hydrate a head tree for an ordinary main commit", async (context) => {
+  const fixture = publisherRepositoryFixture();
+  writeFileSync(join(fixture.root, "ordinary.txt"), "ordinary main change\n");
+  gitRun(fixture.root, ["add", "ordinary.txt"]);
+  gitRun(fixture.root, ["commit", "-m", "fix: ordinary main change"]);
+  fixture.candidateSha = gitRun(fixture.root, ["rev-parse", "HEAD"]);
+  fixture.identity = candidateIdentityFromContents(
+    releaseSourcePair().candidate,
+    fixture.candidateSha,
+  );
+  writeFileSync(
+    fixture.eventPath,
+    JSON.stringify({
+      repository: { id: REPOSITORY_ID },
+      workflow_run: {
+        conclusion: "success",
+        event: "push",
+        head_branch: "main",
+        head_repository: { full_name: REPOSITORY, id: REPOSITORY_ID },
+        head_sha: fixture.candidateSha,
+      },
+    }),
+  );
+  const transport = publisherTransport(fixture, { associatedPulls: [] });
+  context.after(installPublisherEnvironment(fixture, transport.fetch));
+
+  assert.deepEqual(await runPublisher(fixture.root), {
+    action: "none",
+    reason: "ordinary_main",
+  });
+  assert.equal(
+    transport.calls.filter((call) => call.pathname.includes("/git/commits/")).length,
+    0,
+  );
 });
 
 test("runPublisher recovers a lost release acknowledgement only after exact readback", async (context) => {
