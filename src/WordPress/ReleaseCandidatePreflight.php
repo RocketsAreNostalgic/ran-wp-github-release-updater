@@ -449,7 +449,7 @@ final class ReleaseCandidatePreflight {
 			$query = $this->query();
 			$list  = $this->artifacts->listReleases( $query );
 			if ( $list instanceof \WP_Error ) {
-					$this->publishManagedFailure( $claim, self::errorCode( $list ), self::FAILURE_COOLDOWN );
+				$this->publishManagedFailure( $claim, self::errorCode( $list ), self::FAILURE_COOLDOWN );
 				return $list;
 			}
 			$renewed = $this->operations->renew(

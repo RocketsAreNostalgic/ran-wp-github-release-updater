@@ -99,6 +99,7 @@ if ( ! $ran_wp_github_release_updater_broker_is_compatible ) {
 
 		/**
 		 * Passive runtime diagnostic providers, keyed by registration ID.
+		 * Provider results remain untrusted until diagnostics() validates their shape.
 		 *
 		 * @var array<string, callable(): mixed>
 		 */

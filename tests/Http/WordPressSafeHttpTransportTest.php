@@ -92,4 +92,21 @@ final class WordPressSafeHttpTransportTest extends TestCase {
 		$this->assertInstanceOf( \WP_Error::class, $result );
 		$this->assertSame( 'github_updater_invalid_response_status', $result->get_error_code() );
 	}
+
+	public function testRejectsOutOfRangeResponseStatuses(): void {
+		foreach ( array( 0, '0', 99, '99', 600, '600' ) as $statusCode ) {
+			WordPressState::$httpResponses[] = array(
+				'response' => array( 'code' => $statusCode ),
+				'headers'  => array(),
+				'body'     => '',
+			);
+
+			$result = ( new WordPressSafeHttpTransport() )->get(
+				new Request( 'https://api.github.com/repos/owner/repository/releases/latest' )
+			);
+
+			$this->assertInstanceOf( \WP_Error::class, $result );
+			$this->assertSame( 'github_updater_invalid_response_status', $result->get_error_code() );
+		}
+	}
 }

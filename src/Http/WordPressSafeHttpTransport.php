@@ -32,7 +32,7 @@ final class WordPressSafeHttpTransport implements Transport {
 		if ( is_string( $statusCode ) && (string) (int) $statusCode === $statusCode ) {
 			$statusCode = (int) $statusCode;
 		}
-		if ( ! is_int( $statusCode ) ) {
+		if ( ! is_int( $statusCode ) || 100 > $statusCode || 599 < $statusCode ) {
 			return new \WP_Error(
 				'github_updater_invalid_response_status',
 				'GitHub returned an invalid HTTP response status.'
