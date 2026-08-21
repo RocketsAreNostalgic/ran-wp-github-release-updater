@@ -379,6 +379,14 @@ preflight, validate the stored scalar types, parse the fingerprint, and freshly
 acquire that exact release:
 
 ```php
+$preflight = ReleaseCandidatePreflight::fromProspectiveTarget( array(
+	'repository' => 'RocketsAreNostalgic/example-plugin',
+	'providerRepositoryId' => '123456789',
+	'channel' => 'stable',
+	'accessToken' => null,
+	'packageType' => 'plugin',
+) );
+
 if (
 	is_wp_error( $preflight )
 	|| ! is_array( $approvedRelease )
