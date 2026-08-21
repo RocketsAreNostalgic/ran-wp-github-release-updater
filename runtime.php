@@ -170,8 +170,9 @@ return static function ( array $targets ): void {
 				$release_assurance
 			);
 			if ( $updater instanceof \WP_Error ) {
-				$code = sanitize_key( $updater->get_error_code() );
-				$code = '' === $code
+				$error_code = $updater->get_error_code();
+				$code       = sanitize_key( is_string( $error_code ) ? $error_code : '' );
+				$code       = '' === $code
 					? 'invalid_target_configuration'
 					: substr( $code, 0, 80 );
 				NativePluginUpdater::registerConfigurationNotice( $target, $code );

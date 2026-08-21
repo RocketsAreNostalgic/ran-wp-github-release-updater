@@ -1,11 +1,13 @@
+includes:
+	- vendor/szepeviktor/phpstan-wordpress/extension.neon
+
 parameters:
 	level: 8
+	treatPhpDocTypesAsCertain: false
 	paths:
 		- bootstrap.php
 		- runtime.php
 		- src
-	bootstrapFiles:
-		- tests/phpstan-wordpress-stubs.php
 	excludePaths:
 		analyse:
 			- tests
