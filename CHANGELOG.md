@@ -1,5 +1,46 @@
 # Changelog
 
+## [2.0.0-beta.8](https://github.com/RocketsAreNostalgic/ran-wp-github-release-updater/compare/v2.0.0-beta.7...v2.0.0-beta.8) (2026-08-21)
+
+
+### ⚠ BREAKING CHANGES
+
+* harden native updater identity and finalization
+* harden update authority and lifecycle coordination ([#3](https://github.com/RocketsAreNostalgic/ran-wp-github-release-updater/issues/3))
+
+### Features
+
+* harden update authority and lifecycle coordination ([#3](https://github.com/RocketsAreNostalgic/ran-wp-github-release-updater/issues/3)) ([66ed743](https://github.com/RocketsAreNostalgic/ran-wp-github-release-updater/commit/66ed7439ffacb433706744ff6adadadc5f2f002d))
+
+
+### Bug Fixes
+
+* **bootstrap:** wait for provider-ready targets ([de6642d](https://github.com/RocketsAreNostalgic/ran-wp-github-release-updater/commit/de6642d841e46250f29f6ec485eee373e27562d7))
+* **bootstrap:** wait for provider-ready targets ([f6638eb](https://github.com/RocketsAreNostalgic/ran-wp-github-release-updater/commit/f6638ebe2d7751182e427ea6ac8cb691ef90f5da))
+* enforce updater target truth ([fdd403f](https://github.com/RocketsAreNostalgic/ran-wp-github-release-updater/commit/fdd403fb8c836b073985da242ab018874ffaa30c))
+* harden native updater identity and finalization ([b0d2d85](https://github.com/RocketsAreNostalgic/ran-wp-github-release-updater/commit/b0d2d85394726f94becc37b157a1376f75adc671))
+* preserve automatic update continuity ([e923eae](https://github.com/RocketsAreNostalgic/ran-wp-github-release-updater/commit/e923eae6d54833dd1b72c38b339e8f2d51aa8877))
+* preserve automatic update continuity ([3281663](https://github.com/RocketsAreNostalgic/ran-wp-github-release-updater/commit/328166347037f13dfeb731040e7d66c89aae940a))
+* publish updater releases from green merges ([2d17c7c](https://github.com/RocketsAreNostalgic/ran-wp-github-release-updater/commit/2d17c7c75a6b228d45040e09d59182dc2f7dfd24))
+* publish updater releases from green merges ([3e539a8](https://github.com/RocketsAreNostalgic/ran-wp-github-release-updater/commit/3e539a8b26b0f4b31117ddadb92e80dc565f231a))
+* **release:** bind immutable acknowledgement to repository ([bb130b0](https://github.com/RocketsAreNostalgic/ran-wp-github-release-updater/commit/bb130b0b66fca6c48f2c178a74e6ebe4ab18e138))
+* **release:** read deleted release heads remotely ([8719ffd](https://github.com/RocketsAreNostalgic/ran-wp-github-release-updater/commit/8719ffdca0ea2b9d8bb6f1641fc14e84e908ea45))
+* **release:** replace inaccessible immutable preflight ([8cd33d9](https://github.com/RocketsAreNostalgic/ran-wp-github-release-updater/commit/8cd33d9599b1119ecc3372f963d7c8d9c2eed876))
+* retain install state until finalization ([426e290](https://github.com/RocketsAreNostalgic/ran-wp-github-release-updater/commit/426e2909f79b61fe4a1938c23c69fdb7e21d97bb))
+* retain install state until finalization ([549cfff](https://github.com/RocketsAreNostalgic/ran-wp-github-release-updater/commit/549cfff1ee8417e6e67097d44c000c6d59ae6f50))
+* surface selected runtime load failures ([f527514](https://github.com/RocketsAreNostalgic/ran-wp-github-release-updater/commit/f527514969fbc0a45184a9d792c7de73e073d286))
+
+
+### Performance
+
+* bound native release candidate inspection ([f644a0a](https://github.com/RocketsAreNostalgic/ran-wp-github-release-updater/commit/f644a0a7b1010c8fdf6eee63c2de3338e53e28ef))
+
+
+### Miscellaneous Chores
+
+* **release:** resume at beta.8 ([#23](https://github.com/RocketsAreNostalgic/ran-wp-github-release-updater/issues/23)) ([942f18a](https://github.com/RocketsAreNostalgic/ran-wp-github-release-updater/commit/942f18aae98124f0c9f5711c063599df41e9e11e))
+* start clean updater release lineage ([15fe89c](https://github.com/RocketsAreNostalgic/ran-wp-github-release-updater/commit/15fe89c88cb41e5dac7913dd4790d2124f150295))
+
 ## [2.0.0-beta.7](https://github.com/RocketsAreNostalgic/ran-wp-github-release-updater/compare/v2.0.0-beta.6...v2.0.0-beta.7) (2026-08-21)
 
 
