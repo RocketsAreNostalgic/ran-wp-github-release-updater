@@ -181,7 +181,8 @@ final class ReleaseAssurance {
 			return self::error( 'github_updater_release_assurance_invalid_result' );
 		}
 
-		$code = sanitize_key( $result->get_error_code() );
+		$errorCode = $result->get_error_code();
+		$code      = sanitize_key( is_string( $errorCode ) ? $errorCode : '' );
 		if ( '' === $code || strlen( $code ) > 80 ) {
 			$code = 'github_updater_release_assurance_rejected';
 		}

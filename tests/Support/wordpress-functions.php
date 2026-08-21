@@ -146,10 +146,13 @@ if ( ! function_exists( 'wp_http_validate_url' ) ) {
 }
 
 if ( ! function_exists( 'wp_remote_retrieve_response_code' ) ) {
-	function wp_remote_retrieve_response_code( array|WP_Error $response ): int {
-		return $response instanceof WP_Error
-			? 0
-			: (int) ( $response['response']['code'] ?? 0 );
+	function wp_remote_retrieve_response_code( array|WP_Error $response ): int|string {
+		if ( $response instanceof WP_Error ) {
+			return 0;
+		}
+
+		$code = $response['response']['code'] ?? 0;
+		return is_int( $code ) || is_string( $code ) ? $code : 0;
 	}
 }
 

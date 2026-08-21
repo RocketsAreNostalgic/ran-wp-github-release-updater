@@ -62,4 +62,34 @@ final class WordPressSafeHttpTransportTest extends TestCase {
 
 		unlink( $path );
 	}
+
+	public function testNormalizesNumericStringResponseStatus(): void {
+		WordPressState::$httpResponses[] = array(
+			'response' => array( 'code' => '200' ),
+			'headers'  => array(),
+			'body'     => '',
+		);
+
+		$result = ( new WordPressSafeHttpTransport() )->get(
+			new Request( 'https://api.github.com/repos/owner/repository/releases/latest' )
+		);
+
+		$this->assertInstanceOf( Response::class, $result );
+		$this->assertSame( 200, $result->statusCode() );
+	}
+
+	public function testRejectsInvalidResponseStatus(): void {
+		WordPressState::$httpResponses[] = array(
+			'response' => array( 'code' => 'invalid' ),
+			'headers'  => array(),
+			'body'     => '',
+		);
+
+		$result = ( new WordPressSafeHttpTransport() )->get(
+			new Request( 'https://api.github.com/repos/owner/repository/releases/latest' )
+		);
+
+		$this->assertInstanceOf( \WP_Error::class, $result );
+		$this->assertSame( 'github_updater_invalid_response_status', $result->get_error_code() );
+	}
 }

@@ -100,7 +100,7 @@ if ( ! $ran_wp_github_release_updater_broker_is_compatible ) {
 		/**
 		 * Passive runtime diagnostic providers, keyed by registration ID.
 		 *
-		 * @var array<string, callable(): array<string, mixed>>
+		 * @var array<string, callable(): mixed>
 		 */
 		private array $diagnosticsProviders = array();
 
@@ -447,9 +447,7 @@ if ( ! $ran_wp_github_release_updater_broker_is_compatible ) {
 				}
 
 				$screen = function_exists( 'get_current_screen' ) ? get_current_screen() : null;
-				$base   = is_object( $screen ) && is_string( $screen->base ?? null )
-					? $screen->base
-					: '';
+				$base   = $screen instanceof \WP_Screen ? $screen->base : '';
 				if ( str_ends_with( $base, '-network' )
 					&& ( ! function_exists( 'is_multisite' ) || ! is_multisite() ) ) {
 					return;
@@ -640,16 +638,13 @@ if ( ! $ran_wp_github_release_updater_broker_is_compatible ) {
 			$left       = false === $leftBuild ? $left : substr( $left, 0, $leftBuild );
 			$right      = false === $rightBuild ? $right : substr( $right, 0, $rightBuild );
 
-			list( $leftCore, $leftPrerelease )   = array_pad(
-				explode( '-', $left, 2 ),
-				2,
-				null
-			);
-			list( $rightCore, $rightPrerelease ) = array_pad(
-				explode( '-', $right, 2 ),
-				2,
-				null
-			);
+			$leftParts      = explode( '-', $left, 2 );
+			$leftCore       = $leftParts[0];
+			$leftPrerelease = $leftParts[1] ?? null;
+
+			$rightParts      = explode( '-', $right, 2 );
+			$rightCore       = $rightParts[0];
+			$rightPrerelease = $rightParts[1] ?? null;
 
 			$leftCoreParts  = explode( '.', $leftCore );
 			$rightCoreParts = explode( '.', $rightCore );
@@ -1138,7 +1133,7 @@ return static function (
 		 *
 		 * @param object               $broker Request-local broker.
 		 * @param string               $registrationId Opaque target ID.
-		 * @param array<string, mixed> $target Plain target configuration.
+		 * @param array<array-key, mixed> $target Plain target configuration.
 		 */
 		public function __construct(
 			private object $broker,

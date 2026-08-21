@@ -512,7 +512,7 @@ final class NativePluginUpdater {
 		}
 		$blocked = $this->renewPendingInstall();
 		if ( $blocked instanceof \WP_Error ) {
-			return $this->downloadError( $blocked->get_error_code(), $blocked->get_error_message() );
+			return $this->downloadError( self::errorCode( $blocked ), $blocked->get_error_message() );
 		}
 
 		$verified = $this->artifacts->acquireDescribed( $descriptor );
@@ -523,7 +523,7 @@ final class NativePluginUpdater {
 		$blocked = $this->renewPendingInstall();
 		if ( $blocked instanceof \WP_Error ) {
 			$verified->discard();
-			return $this->downloadError( $blocked->get_error_code(), $blocked->get_error_message() );
+			return $this->downloadError( self::errorCode( $blocked ), $blocked->get_error_message() );
 		}
 		$validation = $this->validatedCandidateValidation( $offer['candidate_validation'] ?? null );
 		if ( null === $validation ) {
@@ -544,7 +544,7 @@ final class NativePluginUpdater {
 		$blocked = $this->renewPendingInstall();
 		if ( $blocked instanceof \WP_Error ) {
 			$verified->discard();
-			return $this->downloadError( $blocked->get_error_code(), $blocked->get_error_message() );
+			return $this->downloadError( self::errorCode( $blocked ), $blocked->get_error_message() );
 		}
 		$claimed = $verified->claim();
 		if ( $claimed instanceof \WP_Error ) {
@@ -2191,9 +2191,7 @@ final class NativePluginUpdater {
 			return false;
 		}
 		$screen = function_exists( 'get_current_screen' ) ? get_current_screen() : null;
-		$base   = is_object( $screen ) && is_string( $screen->base ?? null )
-			? $screen->base
-			: '';
+		$base   = $screen instanceof \WP_Screen ? $screen->base : '';
 		if ( ! in_array(
 			$base,
 			array(
@@ -2330,12 +2328,7 @@ final class NativePluginUpdater {
 	}
 
 	private static function errorCode( \WP_Error $error ): string {
-		$callable = array( $error, 'get_error_code' );
-		if ( ! is_callable( $callable ) ) {
-			return 'github_updater_error';
-		}
-
-		$code = call_user_func( $callable );
+		$code = $error->get_error_code();
 		return is_string( $code ) && '' !== $code
 			? $code
 			: 'github_updater_error';
