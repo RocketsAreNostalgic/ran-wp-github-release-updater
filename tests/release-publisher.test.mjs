@@ -798,6 +798,7 @@ test("runPublisher refuses a missing or mismatched immutable repository acknowle
 
   for (const acknowledgement of [
     undefined,
+    "",
     "1",
     String(REPOSITORY_ID + 1),
     ` ${REPOSITORY_ID} `,
