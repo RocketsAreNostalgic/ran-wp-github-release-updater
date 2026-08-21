@@ -1,97 +1,42 @@
 # RAN WordPress GitHub Release Updater
 
-A Composer library that lets WordPress plugins and themes offer updates from
-exact GitHub Release assets through WordPress Core's native update lifecycle.
+A Composer library for offering WordPress plugin and theme updates from exact
+GitHub Release ZIP assets through WordPress Core's native update lifecycle.
 
-The public source lineage restarts with `1.6.0-beta.1`. Earlier prerelease
-identities are retired and must not be reused by consumers or publishers.
+The updater verifies the repository, release, tag commit, uploaded asset,
+GitHub-reported SHA-256 digest, downloaded bytes, archive layout, and WordPress
+package headers before it offers an update. If any part of that chain does not
+match, the release is not offered.
 
-Released changes are recorded in the Release Please-owned
-[CHANGELOG.md](CHANGELOG.md). Accepted unreleased Conventional Commits are
-summarized in the active Release Please proposal; dirty local work is in
-neither record.
+WordPress Core still owns update scheduling, the Plugins and Updates screens,
+filesystem credentials, extraction, temporary backups, installation,
+restoration, activation state, and cleanup. This package is a library, not an
+activatable plugin, and it does not add another installer, scheduler, candidate
+store, or CLI.
 
-## Beta 1
+Public and private repositories, plugins and themes, and multiple independent
+copies of the library in one WordPress request are supported.
 
-Beta 1 supports public and private GitHub repositories, plugins and themes,
-and multiple independent package copies in one WordPress request.
-Its request-local broker selects the highest compatible V1 runtime regardless
-of plugin load order, uses a deterministic path tie-break for equivalent
-versions, and loads only that runtime. Each consumer retains its own
-configuration, cache and updater target.
+## Requirements and support
 
-Every update remains bound to:
+- PHP 8.2 or newer, with the Hash, JSON, and Zip extensions
+- WordPress 6.5 or newer
+- Composer 2 for installation and development
 
-- the configured repository and exact GitHub release;
-- the release tag's resolved commit;
-- exactly one uploaded ZIP asset;
-- GitHub's asset size and SHA-256 digest; and
-- the SHA-256 digest of the downloaded file.
+The project is in Beta. Beta releases are intended for controlled integration
+testing and do not have a backport policy.
 
-Before an update is offered, the library also binds that exact release
-identity to the package WordPress will install. It downloads the exact
-already-digest-verified ZIP to temporary storage, reads only the canonical
-plugin main file (or a theme root's `style.css`) directly from the archive, and
-compares its `Version:` header with the normalized release tag. It never
-extracts or installs the archive during this check.
+Use the [issue tracker](https://github.com/RocketsAreNostalgic/ran-wp-github-release-updater/issues)
+for ordinary defects. Report suspected vulnerabilities privately as described
+in [SECURITY.md](SECURITY.md); do not put tokens, signed URLs, credentials, raw
+HTTP responses, or temporary paths in a public issue.
 
-Release tags use full `MAJOR.MINOR.PATCH` versions with an optional canonical
-SemVer prerelease suffix. A stable WordPress header may use
-the normal two-part shorthand: `2.1` is equivalent to `2.1.0`. A prerelease
-header must contain the complete canonical value, such as `2.1.0-beta.2`.
-Leading `v`, shortened prereleases, extra components, and other malformed
-headers are blocked. A missing, unreadable, invalid, or mismatched header is a
-fail-closed result: neither manual nor automatic WordPress update offers are
-published until the publisher corrects the release asset.
+## Install the library
 
-The canonical plugin header or theme `style.css` must also declare an
-`Update URI` for the configured GitHub repository. Host, owner and repository
-comparison is case-insensitive and trailing slashes are ignored; credentials,
-query strings, fragments, release URLs and other repository paths are rejected.
-
-WordPress Core continues to own update scheduling, the Plugins and Updates
-screens, downloading orchestration, filesystem credentials, extraction,
-temporary backups, installation, restoration, activation state, and cleanup.
-
-Private credentials may be a string or a zero-argument callable. Callables are
-resolved separately for each top-level request, allowing rotation without
-re-registering the updater. Authorization is attached only to
-`api.github.com`; automatic redirects are disabled, every redirect is validated
-through WordPress safe-HTTP policy and an exact GitHub asset-host allowlist, and
-Authorization is permanently stripped when the chain leaves the API host.
-
-Preflight caps total expanded archive entries at 127,826,407 bytes (about
-121.9 MiB), keeping WordPress Core's `2.1` working-space estimate within the
-documented 256 MiB ceiling. The package also rejects a larger Core
-`pre_unzip_file` report for the exact verified archive. After Core extracts the
-ZIP, it validates the canonical root, entry file, version and compatibility headers.
-If the plugin or theme is installed under a safe noncanonical directory name,
-it maps only Core's staged directory through `WP_Filesystem`; it never renames,
-deletes or copies the live installed directory itself.
-
-The staged header check remains a defense-in-depth guard after Core extraction.
-It reads a size-bounded metadata file through the active `WP_Filesystem`
-transport, applies the same `2.1`/`2.1.0` comparison and reports a
-release-version mismatch without attempting to repair the package.
-
-Failures are retained only as bounded expiring state inside the target's
-database-authoritative coordination row. Default
-Plugins and Updates screen notices are capability-scoped, filterable through
-`ran_wp_github_release_updater_notice`, sanitized after filtering, and quiet
-for transient network failures. When `WP_DEBUG_LOG` is enabled, the package
-emits only concise stable events without credentials, URLs, response bodies or
-filesystem paths.
-
-Consumers must register directly from their main plugin files. A copy loaded
-after `plugins_loaded` is deferred until the next request and cannot replace the
-runtime already selected for the current request.
-
-## Installation
-
-Unless this package is available through the consumer's configured Composer
-registry, declare its GitHub VCS repository first. Private repository
-authentication belongs in Composer's external auth configuration, not in the
-consumer repository.
+Unless the package is available through the consumer's configured Composer
+registry, declare its GitHub repository first. Keep private-repository
+authentication in Composer's external auth configuration, not in the consumer
+repository.
 
 ```sh
 composer config repositories.ran-wp-github-release-updater vcs \
@@ -99,11 +44,15 @@ composer config repositories.ran-wp-github-release-updater vcs \
 composer require ran/wp-github-release-updater:^2.0@beta
 ```
 
-The package intentionally declares no production Composer autoload mapping.
-Each consuming application owns its repository declaration, exact lock and
-production bundling of this dependency. Plugins may require the bootstrap from
-their main file. Theme targets must instead be registered by an ordinary active
-plugin or another application entrypoint that loads before `plugins_loaded`:
+The package deliberately declares no production Composer autoload mapping.
+Each consumer owns its repository declaration, lock file, and production
+bundling of this dependency. The released plugin or theme ZIP must contain the
+installed library; production sites do not run Composer to obtain it.
+
+## Register a plugin
+
+Require `bootstrap.php` from the plugin's main file, create the updater, and
+register the target:
 
 ```php
 $createUpdater = require __DIR__
@@ -116,147 +65,245 @@ $updater = $createUpdater(
 	pluginSlug: 'example-plugin',
 	channel: 'stable',
 	accessToken: null,
-	autoUpdatePolicy: 'site-controlled',
+	autoUpdatePolicy: 'manual',
 	cacheDuration: 21_600,
 	failureCacheDuration: 900,
-	nativeDiscovery: true,
 );
 
 $updater->register();
 ```
 
-For a private repository, prefer a request-time resolver:
+`register()` is idempotent. `diagnostics()` returns passive, bounded state and
+makes no remote request. `refresh()` clears only this target's package cache and
+the matching Core update transient; the next normal WordPress update check
+performs discovery.
+
+### Registration timing
+
+Load the bootstrap from the plugin's main file. Register there or from a
+`plugins_loaded` callback below `PHP_INT_MAX - 1`. At that priority, the
+request-local broker selects the highest compatible V1 runtime regardless of
+plugin load order, using a deterministic path tie-break for equivalent
+versions, and loads only that runtime.
+
+A target registered at or after the selector reports
+`inactive / late_registration` for that request. A package copy loaded after
+`plugins_loaded` is deferred until the next request and cannot replace the
+runtime already selected.
+
+At declaration time, only the returned bootstrap facade is available. Runtime
+classes under `RAN\WPGitHubReleaseUpdater\V1` become available after the selected
+runtime loads at `plugins_loaded`; use them from a callback at `PHP_INT_MAX`.
+
+### Private repositories
+
+Prefer a request-time token resolver so credentials can rotate without
+re-registering the updater:
 
 ```php
 accessToken: static fn (): ?string => getenv( 'RAN_GITHUB_TOKEN' ) ?: null,
 ```
 
-The token is never placed in the package URL, cache, notices or diagnostics.
+The token is attached only to `api.github.com`. It is not placed in the package
+URL, cache, notices, diagnostics, or logs. Automatic redirects are disabled;
+each redirect is checked with WordPress safe HTTP and an exact GitHub asset-host
+allowlist, and authorization is removed when the request leaves the API host.
 
-Load the bootstrap from the plugin's main file. The target may register there
-or from a `plugins_loaded` callback below `PHP_INT_MAX - 1`; the broker selects
-one runtime at that priority. A target registered at or after that selector is
-rejected as `inactive / late_registration` for the current request. A theme's
-`functions.php` loads after `plugins_loaded`, so a theme still cannot
-self-register. Inactive themes do not execute and cannot self-register.
-`register()` is idempotent and `diagnostics()` is passive: it does not make a
-remote request. At declaration time, only the returned bootstrap facade is
-available. Runtime classes under `RAN\WPGitHubReleaseUpdater\V1` are available
-only after the selected runtime has run at `plugins_loaded`; defer their use to
-a callback at `PHP_INT_MAX`.
+## Register a theme
 
-Set `nativeDiscovery: false` when a consumer must still participate in shared
-runtime arbitration but must not create a native update target. The target
-reports passive `inactive / native_discovery_disabled` diagnostics and
-registers no discovery, plugin-information, automatic-update, upgrader,
-completion, notice, refresh, or HTTP work. This is distinct from
-`autoUpdatePolicy: 'disabled'`, which suppresses an offer but can still perform
-release discovery.
-
-Every native target must pass GitHub's stable numeric repository identity as
-`providerRepositoryId`. Read the repository's `id` from GitHub's repository API
-when configuring the integration. Discovery, cached offers and final
-acquisition are then bound to the same repository even if its owner or name is
-later transferred or recreated.
-
-The supported integration surfaces are this bootstrap facade and the managed
-preflight below. Classes under `src/Artifact` implement the trust engine and
-are internal; consumers should not construct or introspect them directly.
-
-## Optional target-registration signal
-
-An optional integration can ask whether this package has already accepted a
-registration for one exact installed WordPress target in the current request:
+A theme cannot register itself: an active theme's `functions.php` loads too
+late for the broker, and an inactive theme does not execute. Register every
+managed theme from an ordinary active plugin or another early application entry
+point. Pass the absolute `style.css` path and the installed stylesheet identity:
 
 ```php
-if (
-	function_exists( 'ran_wp_github_release_updater_v1_has_registered_target' )
-	&& ran_wp_github_release_updater_v1_has_registered_target(
-		'plugin',
-		plugin_basename( __FILE__ )
-	)
-) {
-	// Do not register a second RAN updater for this plugin target.
-}
+$updater = $createUpdater(
+	pluginFile: get_theme_root() . '/locally-renamed-theme/style.css',
+	repository: 'RocketsAreNostalgic/example-theme',
+	providerRepositoryId: '987654321',
+	pluginSlug: 'example-theme',
+	autoUpdatePolicy: 'manual',
+	targetType: 'theme',
+	stylesheet: 'locally-renamed-theme',
+);
+
+$updater->register();
 ```
 
-Use a plugin's `plugin_basename()` value for `plugin` targets and its WordPress
-stylesheet slug for `theme` targets. The function returns `true` only after a
-RAN updater facade has successfully submitted that exact target to this
-request's broker. It exposes no updater configuration, repository, credential,
-policy, or diagnostics; it does not detect third-party update mechanisms and
-does not promise that the selected runtime will later become active.
+Do not put this registration in the theme's `functions.php` or an
+`after_setup_theme` callback. Those paths cannot register in time or cover an
+inactive theme.
 
-## Managed-release preflight API
+## Configure a target
 
-Managed consumers such as deployment controllers can use the WordPress-facing
-preflight instead of constructing artifact descriptors or parsing ZIP files.
-`check()` preserves the released bounded row-backed verdict cache; pass `true` to
-force fresh discovery and archive inspection. It returns a
-`CandidateValidation` object with only safe fields: `state`, `code`,
-`release_tag`, normalized `release_version`, `package_header_version`, and
-exact release/ZIP/digest identity. `cacheDuration` remains configurable from
-300 to 86,400 seconds and defaults to six hours. Remote failures return a
-credential-free `WP_Error` with the original updater error code and any bounded
-rate-limit cooldown.
+| Parameter | Required | Accepted value or default |
+| --- | --- | --- |
+| `pluginFile` | Yes | Absolute plugin main-file path, or a theme's absolute `style.css` path |
+| `repository` | Yes | GitHub `owner/name` |
+| `providerRepositoryId` | Yes | GitHub's stable numeric repository `id` |
+| `pluginSlug` | No | Canonical archive root; derived from `repository` when omitted |
+| `channel` | No | `stable` (default) or `prerelease` |
+| `accessToken` | No | String, zero-argument callable, or `null` |
+| `autoUpdatePolicy` | No | `manual`, `automatic`, or `disabled`; defaults to manual behavior |
+| `cacheDuration` | No | 300–86,400 seconds; default 21,600 |
+| `failureCacheDuration` | No | 60–3,600 seconds, no longer than `cacheDuration`; default 900 |
+| `nativeDiscovery` | No | `true` (default), or `false` to join runtime arbitration without creating an update target |
+| `targetType` | For themes | `theme`; plugins are the default |
+| `stylesheet` | For themes | Installed WordPress stylesheet identity |
 
-`CandidateValidation::relationshipTo()` is the canonical offered-versus-
-installed release relationship. It returns only `newer`, `same`, `older`, or
-`invalid`, so consumers do not need to reproduce the updater's SemVer rules.
+Read `providerRepositoryId` from GitHub's repository API when configuring the
+integration. Discovery, cached offers, and final acquisition are bound to that
+numeric identity, even if the repository owner or name is later transferred or
+recreated.
 
-The updater retains exactly one non-autoloaded main-site option row for each
-target it has coordinated. That bounded row is intentional authority state,
-not a transient lock: its idle tombstone preserves the monotonic fencing
-generation across later checks and installations. Repeated operations reuse
-the same row, and object-cache availability or eviction never changes
-ownership. The package does not delete a row merely because one consumer is
-temporarily inactive; removing a consumer therefore leaves that single inert
-row unless site maintenance deliberately removes the consumer's data.
+The automatic-update policies are deliberately distinct:
 
-### Lease timing
+- `manual` publishes an eligible update to WordPress and preserves the site's
+  own automatic-update choice only when the release also passes the automatic
+  profile.
+- `automatic` permits Core to install the release automatically only when the
+  repository identity is stable and GitHub reports the published Release as
+  immutable. The updater checks the same profile again against a fresh release
+  description and ZIP before installation.
+- `disabled` records passive release status without offering an installation.
 
-Discovery and managed-preflight claims last 600 seconds by default.
-Installation claims last 3,600 seconds from the latest successful package
-checkpoint, matching WordPress Core's hour-scale automatic-updater boundary.
-Normal success or failure releases the claim immediately; the duration is the
-nominal bounded abandoned-operation recovery window, not a minimum wait. Rapid
-same-database-second checkpoints may extend the exact expiry by a few seconds
-so each compare-and-set renewal writes observably different bytes.
+The legacy `site-controlled`, `forced-on`, and `forced-off` values remain
+accepted for existing integrations.
 
-Developers may set either a WordPress constant in `wp-config.php` or the
-same-named process environment variable:
+Set `nativeDiscovery: false` when a consumer must join shared runtime
+arbitration without creating a native update target. It reports
+`inactive / native_discovery_disabled` and performs no discovery,
+plugin-information, automatic-update, upgrader, completion, notice, refresh,
+or HTTP work. This is different from `autoUpdatePolicy: 'disabled'`, which can
+still discover releases.
 
-```php
-define( 'RAN_WP_GITHUB_RELEASE_UPDATER_DISCOVERY_LEASE_SECONDS', 900 );
-define( 'RAN_WP_GITHUB_RELEASE_UPDATER_INSTALL_LEASE_SECONDS', 7200 );
+## Publish a compatible release
+
+This is the publishing contract for every WordPress plugin or theme that uses
+the updater.
+
+### GitHub Release
+
+Publish a non-draft GitHub Release in the configured repository. A `stable`
+target rejects a release marked as a prerelease and any tag containing a SemVer
+prerelease suffix. A `prerelease` target may select either kind.
+
+The tag must contain a full `MAJOR.MINOR.PATCH` version, with an optional
+canonical SemVer prerelease suffix. A single leading `v` is accepted:
+
+```text
+v1.2.3
+v1.2.3-beta.1
 ```
 
-| Setting | Default | Accepted range |
-| --- | ---: | ---: |
-| `RAN_WP_GITHUB_RELEASE_UPDATER_DISCOVERY_LEASE_SECONDS` | 600 | 60–3,600 |
-| `RAN_WP_GITHUB_RELEASE_UPDATER_INSTALL_LEASE_SECONDS` | 3,600 | 600–86,400 |
+Short tags, extra version components, and malformed prerelease identifiers are
+rejected.
 
-A defined WordPress constant takes precedence over the corresponding
-environment variable. Values must be integers or unsigned decimal strings;
-invalid or out-of-range selected values use the safe default. Configure every
-web, cron and CLI runtime consistently. The stored database expiry remains the
-sole ownership authority even when processes disagree about configuration.
+### Uploaded ZIP
 
-The package revalidates ownership at every hook WordPress exposes, including
-immediately before returning from `upgrader_source_selection`. WordPress then
-owns backup, destination removal and copying without another package hook.
-Accordingly, the final filesystem transition has WordPress Core-equivalent
-concurrency semantics rather than a claim of absolute fencing across an
-indefinitely suspended PHP worker. No file sentinel or second installer is
-introduced.
+Upload exactly one `.zip` asset to the Release:
 
-The reviewed [install-session ownership gate](docs/install-session-ownership-gate.md)
-retains `NativePluginUpdater` as the single WordPress adapter. A proposed
-hook-free session extraction could relocate fields, but could not delete total
-code, lifecycle branches or custody owners without splitting shutdown and
-persistent-state transitions. Reopen that decision only on new state, another
-illegal-state lifecycle defect, duplicated cleanup or a second independently
-changing install lifecycle.
+```text
+example-plugin-1.2.3.zip
+```
+
+Non-ZIP assets are ignored, but zero or multiple uploaded ZIPs fail closed. The
+ZIP must be completely uploaded, no larger than 50 MiB, and accompanied by the
+`sha256:` digest reported by GitHub. The downloaded size and SHA-256 digest must
+match that release metadata.
+
+GitHub's generated **Source code** archives are not uploaded release assets and
+do not satisfy this contract.
+
+### Archive layout
+
+The ZIP must contain one safe top-level package directory matching
+`pluginSlug`. It may contain at most 10,000 entries and about 121.9 MiB of total
+expanded content. Unsafe, duplicate, ambiguous, or multi-root paths are
+rejected.
+
+For a plugin, the root must contain the registered main PHP file with a
+`Plugin Name` header. A prospective first-install inspection, which does not
+already know the main filename, requires exactly one root-level PHP file with a
+`Plugin Name` header. For a theme, the root must contain `style.css` with a
+`Theme Name` header.
+
+The canonical plugin main file or theme `style.css` must also contain:
+
+```text
+Version: 1.2.3
+Update URI: https://github.com/RocketsAreNostalgic/example-plugin
+Requires PHP: 8.2
+Requires at least: 6.5
+```
+
+The `Version` header must match the normalized release tag. A stable header may
+use WordPress's two-part shorthand, so `2.1` matches `v2.1.0`. A prerelease
+header must contain the complete canonical value, such as `2.1.0-beta.2`. Do
+not include the tag's leading `v` in the package header.
+
+`Update URI` must identify the configured GitHub repository. Host, owner, and
+repository comparison is case-insensitive, and a trailing slash is ignored.
+Credentials, query strings, fragments, release URLs, and other repository paths
+are rejected.
+
+`Requires PHP` and `Requires at least` must be valid version values and must be
+satisfied by the target site. The updater does not use WordPress.org
+`Stable tag`, SVN directories, readmes, changelogs, or `package.json` as release
+identity.
+
+If a required header is missing, unreadable, invalid, or inconsistent, the
+release is not offered for either a manual or automatic update.
+
+## How an update is verified
+
+1. The updater describes an eligible release and binds it to the configured
+   numeric repository identity, exact release ID, tag, resolved tag commit, and
+   uploaded ZIP.
+2. It downloads that asset to private temporary storage and verifies its file
+   identity, size, and SHA-256 digest.
+3. It inspects the canonical WordPress header directly inside the verified ZIP,
+   without extracting or installing the package, and checks package identity,
+   version, `Update URI`, and compatibility.
+4. Only then does it publish an update offer through WordPress's native update
+   filters.
+5. Immediately before installation, it freshly describes and downloads the
+   exact release again. A changed repository, release, commit, asset, digest, or
+   package identity fails closed.
+6. WordPress Core extracts and installs the package. The updater validates the
+   staged root and headers as a defense-in-depth check. If the installed package
+   uses a safe noncanonical directory name, it maps only Core's staged
+   directory; it does not rename, delete, or copy the live installed directory.
+
+The [security policy](SECURITY.md) describes the trust boundary and credential
+handling in more detail.
+
+## Diagnostics and notices
+
+The updater keeps bounded, expiring state in one non-autoloaded main-site option
+row per coordinated target. Failed, exhausted, or rate-limited discovery clears
+the readiness-authorizing RAN offer while retaining bounded diagnostics and
+conditional request state. When no safe offer is available, the updater returns
+the incoming WordPress host-filter value.
+
+Default Plugins and Updates screen notices are capability-scoped, filterable
+through `ran_wp_github_release_updater_notice`, sanitized after filtering, and
+quiet for transient network failures. When `WP_DEBUG_LOG` is enabled, the
+package emits concise stable events without credentials, URLs, response bodies,
+archive contents, or filesystem paths.
+
+## Advanced integration
+
+The bootstrap facade is the normal plugin and theme integration surface.
+Deployment controllers can instead use the public WordPress-facing preflight
+APIs for installed-package checks, first-install inspection and acquisition,
+artifact custody, and coordination. These operations use fixed internal request
+budgets. The runtime classes must be used from a callback at `PHP_INT_MAX`;
+classes under `src/Artifact` are internal and should not be constructed or
+introspected by consumers.
+
+For an installed package, create the preflight only after the selected runtime
+has loaded:
 
 ```php
 use RAN\WPGitHubReleaseUpdater\V1\WordPress\ReleaseCandidatePreflight;
@@ -272,7 +319,7 @@ add_action( 'plugins_loaded', static function (): void {
 		'pluginSlug' => 'example-plugin',
 		'mainFile' => 'example-plugin.php',
 		'channel' => 'stable',
-		'accessToken' => static fn (): ?string => getenv( 'RAN_GITHUB_TOKEN' ) ?: null,
+		'accessToken' => null,
 		'packageType' => 'plugin',
 	) );
 
@@ -280,218 +327,127 @@ add_action( 'plugins_loaded', static function (): void {
 }, PHP_INT_MAX );
 ```
 
-For a theme use `packageType => 'theme'`, `themeRoot => 'example-theme'`, and
-omit `mainFile` (the preflight uses `style.css`). This release contract uses
-the embedded WordPress `Version:` and `Update URI` headers. WordPress.org
-`Stable tag`, SVN directories, readmes, changelogs, and `package.json` are not
-considered.
+### Prospective first-install custody
 
-### Prospective first-install verification
-
-An authorised consumer can inspect a package that is not installed yet without
-receiving credentials, internal descriptors, signed URLs or temporary paths.
-
-The selected runtime advertises this strict custody contract as
-`ReleaseCandidatePreflight::PROSPECTIVE_API_VERSION === 4`.
+For a prospective first installation, create the preflight with the same target
+configuration on both the review and installation requests:
 
 ```php
-use RAN\WPGitHubReleaseUpdater\V1\WordPress\ReleaseCandidatePreflight;
+use RAN\WPGitHubReleaseUpdater\V1\WordPress\ReleaseFingerprint;
 
-add_action( 'plugins_loaded', static function (): void {
-	if ( ! class_exists( ReleaseCandidatePreflight::class, false ) ) {
-		return;
-	}
+$preflight = ReleaseCandidatePreflight::fromProspectiveTarget( array(
+	'repository' => 'RocketsAreNostalgic/example-plugin',
+	'providerRepositoryId' => '123456789',
+	'channel' => 'stable',
+	'accessToken' => null,
+	'packageType' => 'plugin',
+) );
+```
 
-	$preflight = ReleaseCandidatePreflight::fromProspectiveTarget( array(
-		'repository' => 'RocketsAreNostalgic/example-plugin',
-		'providerRepositoryId' => '123456789',
-		'channel' => 'stable',
-		'accessToken' => static fn (): ?string => getenv( 'RAN_GITHUB_TOKEN' ) ?: null,
-		'packageType' => 'plugin',
-	) );
+On the review request, list the bounded candidates and inspect the selected
+release ZIP. Every call can return `WP_Error` and must be checked:
 
-	$candidates = is_wp_error( $preflight ) ? $preflight : $preflight->listCandidates();
-	$selected = is_wp_error( $candidates ) ? $candidates : $candidates[0];
-	$inspection = is_wp_error( $selected )
-		? $selected
+```php
+$candidates = $preflight->listCandidates();
+if ( is_wp_error( $candidates ) ) {
+	$inspection = $candidates;
+} else {
+	$selected = $candidates[0] ?? null;
+	$inspection = null === $selected
+		? new WP_Error( 'no_candidate', 'No release candidate was selected.' )
 		: $preflight->inspectExact( $selected->releaseId(), $selected->tag() );
+}
 
-	$artifact = is_wp_error( $inspection )
-		? $inspection
-		: $preflight->acquireExact(
-			$selected->releaseId(),
-			$selected->tag(),
-			$inspection->fingerprint()
-		);
-}, PHP_INT_MAX );
+if ( ! is_wp_error( $inspection ) ) {
+	$approvedRelease = array(
+		'release_id' => $inspection->releaseId(),
+		'tag' => $inspection->tag(),
+		'fingerprint' => $inspection->fingerprint()->value(),
+	);
+	// Persist these bounded values with the authorised install request.
+}
 ```
 
-`listCandidates()` returns up to eight semantically ordered, channel-eligible
-`ProspectiveReleaseCandidate` summaries. Each exposes the release ID, tag,
-canonical version, prerelease status, publication time, and expected asset
-names. The existing `discover()` method remains available for consumers that
-only need the newest candidate.
-
-`inspectExact()` downloads, validates and discards the selected ZIP.
-`ReleaseInspection` contains bounded display-safe scalars and a compact
-`v1:<sha256>` continuity fingerprint derived from that exact ZIP and its
-validated headers. Post that fingerprint with the existing authorised install
-request, parse it with
-`ReleaseFingerprint::fromString()`, and pass it to `acquireExact()`. Acquisition
-re-describes the exact published release ID and tag, resolves its published tag
-commit, freshly downloads the release asset, rejects any release, commit, asset,
-digest, or package-identity change, and validates the ZIP in one bounded
-inventory pass. No branch value participates in published-release authority.
-The deliberate second download means display-time inspection is never reused as
-installation custody.
-
-The normal single-page, no-redirect request characterization is:
-
-| Operation | Logical requests |
-| --- | ---: |
-| Native offer discovery and ZIP validation | 5 |
-| Native fresh pre-install acquisition | 4 |
-| Prospective candidate list | 2 |
-| Prospective exact review | 4 |
-| Prospective exact acquisition | 4 |
-
-A full prospective list, review, and acquisition is therefore 10 logical
-requests and two ZIP downloads. Each ZIP download may add one allowlisted
-redirect. An incompatible native candidate adds four requests before the
-selector can safely try the next release. This is deliberate: headers inside
-the exact ZIP are the compatibility authority, and neither display-time bytes
-nor an earlier candidate verdict are installation custody. No cross-request
-pool, second cache, or retained ZIP is introduced.
-
-The returned `ValidatedReleaseArtifact` retains cleanup ownership. Call
-`discard()` to abandon it or call `handoffToCore()` exactly once immediately
-before WordPress Core consumes the resulting `ClaimedArtifact`. The claim
-retains the updater-verified digest and file identity:
-`ClaimedArtifact::assertUnchanged()` returns that frozen snapshot only while the
-private archive is unchanged, and `ClaimedArtifact::discard()` deletes only
-that same file. `ClaimedArtifact::path()` remains available for the immediate
-WordPress Core handoff. The updater does not install or adopt the package.
-
-Themes use the same callback, but an early application registrar must call it
-for every managed theme, whether active or inactive. For example, the following
-belongs in an ordinary active plugin's main file. Pass the absolute `style.css`
-path and the native installed stylesheet identity:
+On the separately authorised installation request, parse the stored fingerprint
+and freshly acquire that exact release:
 
 ```php
-$updater = $createUpdater(
-	pluginFile: get_theme_root() . '/locally-renamed-theme/style.css',
-	repository: 'RocketsAreNostalgic/example-theme',
-	providerRepositoryId: '987654321',
-	pluginSlug: 'example-theme',
-	autoUpdatePolicy: 'manual',
-	targetType: 'theme',
-	stylesheet: 'locally-renamed-theme',
-);
-$updater->register();
+$fingerprint = ReleaseFingerprint::fromString( $approvedRelease['fingerprint'] );
+$artifact = is_wp_error( $fingerprint )
+	? $fingerprint
+	: $preflight->acquireExact(
+		$approvedRelease['release_id'],
+		$approvedRelease['tag'],
+		$fingerprint
+	);
+
+if ( ! is_wp_error( $artifact ) ) {
+	$claim = $artifact->handoffToCore();
+	if ( is_wp_error( $claim ) ) {
+		$artifact->discard();
+	} else {
+		// Pass $claim->path() immediately to the authorised WordPress install flow.
+	}
+}
 ```
 
-Do not place this registration in the theme's `functions.php` or an
-`after_setup_theme` callback. Those paths are too late for the request-local
-runtime broker, and they cannot cover inactive themes.
+Inspection downloads, validates, and discards its ZIP. Acquisition downloads
+again and rejects any change to the release, commit, asset, digest, or package
+identity. A retained artifact must be `discard()`ed or handed to Core exactly
+once. After a successful handoff, the claim owns cleanup and must itself be
+discarded if Core does not consume it.
 
-`autoUpdatePolicy` accepts `manual`, `automatic`, or `disabled`. Manual preserves
-the site's native automatic-update choice only when the selected offer also
-passes the automatic profile; a mutable release remains manually installable
-but cannot be admitted by Core's automatic updater. Automatic enables Core auto
-updates only after the selected offer carries a stable provider repository ID
-and an immutable published GitHub Release; the same profile is rechecked
-against the fresh exact descriptor and ZIP before installation. Disabled
-records passive release status without offering an install.
-The legacy `site-controlled`, `forced-on`, and `forced-off` values remain
-accepted for existing plugin integrations.
+The [release assurance extension](docs/release-assurance-extension.md) defines
+the single optional, request-local, rejection-only assurance checker. It can add
+a rejection after the built-in checks, but it cannot waive a failure or install
+a package.
 
-Native discovery scans at most two 20-release pages and describes and downloads
-at most two ZIP-backed compatibility candidates. The prospective selection UI
-still lists up to eight lightweight release summaries without inspecting ZIPs.
-Release-list responses are capped at 256 KiB per page
-and 512 KiB in total. Every request has a ten-second timeout and follows at most one validated
-redirect. Authentication, transport and rate-limit failures retain their exact
-diagnostic classification and cooldown. Failed, exhausted, or rate-limited
-discovery clears the readiness-authorizing RAN offer while retaining bounded
-diagnostics and conditional request state. When no safe offer can be supplied,
-the updater returns the incoming WordPress host-filter value; only a verified
-RAN offer or the explicit disabled policy replaces it.
+### Detect an accepted target registration
 
-One compatible cold target uses five logical requests, six transport hops and
-one ZIP. The terminal two-incompatible case is capped at nine logical requests,
-11 transport hops and two ZIPs per target. At 1/5/10/20 independent targets,
-that terminal envelope is therefore 9/45/90/180 logical requests,
-11/55/110/220 transport hops and 2/10/20/40 ZIPs. Multi-target consumers should
-configure authenticated GitHub access; rate limiting remains fail-closed.
+An integration can ask whether a RAN updater facade has already submitted one
+exact installed target to the current request's broker:
 
-`$updater->refresh()` clears only this target's package cache and Core's native
-plugin or theme update transient. It performs no remote request; the next normal
-WordPress update check repopulates both. The package does not expose a second
-installer, scheduler, candidate store, or CLI.
-
-## Release asset contract
-
-This is the publishing contract for WordPress plugins and themes that consume
-the library. Release Please in this library repository prepares its version
-sources, changelog and release notes only. After exact-candidate Quality proof,
-the repository publisher creates and reads back the tag and immutable GitHub
-source release with no uploaded asset; neither owner builds or uploads a
-consumer's ZIP.
-
-Release Please PRs must merge normally with two parents; squash and rebase
-merges are refused, and their releases must not be published manually.
-Version `2.0.0-beta.7` is intentionally unpublished because its release PR was
-squash-merged; the normal-merge release train resumes at `2.0.0-beta.8`.
-
-Repository admins enable immutable releases, then set the repository Actions
-variable `RAN_RELEASE_PUBLISHER_IMMUTABLE_RELEASES_ACKNOWLEDGED_REPOSITORY_ID`
-to this repository's numeric GitHub repository ID. The value authorizes only
-that exact repository's creation attempt: exact post-create immutable readback
-remains the publication authority, and recovery of an existing exact release
-does not depend on the variable.
-
-Publish exactly one uploaded `.zip` asset on the GitHub Release:
-
-```text
-example-plugin-1.2.3.zip
+```php
+if (
+	function_exists( 'ran_wp_github_release_updater_v1_has_registered_target' )
+	&& ran_wp_github_release_updater_v1_has_registered_target(
+		'plugin',
+		plugin_basename( __FILE__ )
+	)
+) {
+	// Do not register a second RAN updater for this plugin target.
+}
 ```
 
-Non-ZIP assets are ignored; zero or multiple uploaded ZIPs fail closed. GitHub
-must report the ZIP's `sha256:` digest, and the downloaded bytes must match its
-reported size and digest.
+Use `plugin_basename()` for a plugin or the WordPress stylesheet slug for a
+theme. The function returns `true` only after the facade has submitted that
+exact target. It exposes no configuration or credentials, does not detect
+third-party update mechanisms, and does not promise that the selected runtime
+will later become active.
 
-The ZIP must contain exactly one safe top-level package directory. A plugin
-must contain exactly one root-level PHP file with `Plugin Name`; a theme must
-contain root `style.css` with `Theme Name`. That header must also contain the
-release `Version`, canonical repository `Update URI`, `Requires PHP`, and
-`Requires at least`. Prerelease tags retain the complete suffix, for example
-`v1.2.3-beta.1` and `Version: 1.2.3-beta.1`.
+## Development and releases
 
-The selected runtime exposes one optional rejection-only assurance checker
-through
-`ran_wp_github_release_updater_v1_assurance_registration`. Its canonical
-registration, evidence, result semantics, and authority limits are documented
-in the [release assurance extension contract](docs/release-assurance-extension.md).
-The built-in release, digest, archive and package checks remain mandatory and
-sufficient when no checker is present. This seam permits a future
-immutable-release or GitHub Artifact Attestation add-on without putting that
-policy or its dependencies in this package today.
-
-WordPress Core performs extraction and installation; this library does not
-implement a second installer.
-
-## Development
-
-The full gate requires PHP 8.2, Composer and Node.js 24. Node executes only the
-repository publisher outcome fixtures; it is not a library runtime or Composer
-package dependency.
+The full development gate requires PHP 8.2, Composer, and Node.js 24. Node runs
+only the repository publisher outcome fixtures; it is not a production runtime
+or Composer dependency.
 
 ```sh
 composer install
 composer check
 ```
 
-The complete design and staged acceptance gates are in
-`docs/plans/__completed/2026-07-24-wp-github-release-updater-v1-plan-revision-1.md`.
+Release Please prepares this library's version sources, changelog, and release
+notes. Release PRs must merge normally with two parents; squash and rebase
+merges are not publishable. Repository publication also requires immutable
+releases and the Actions variable
+`RAN_RELEASE_PUBLISHER_IMMUTABLE_RELEASES_ACKNOWLEDGED_REPOSITORY_ID` set to this
+repository's numeric GitHub ID. Exact post-create readback remains the authority.
 
-Licensed under GPL-2.0-or-later.
+After the exact candidate passes the repository's quality proof, the publisher
+creates and reads back the tag and immutable GitHub source release. This
+repository does not build or upload a consuming plugin's or theme's ZIP.
+
+The public source lineage begins at `1.6.0-beta.1`; earlier prerelease
+identities are retired. Released changes are recorded in [CHANGELOG.md](CHANGELOG.md).
+
+The project is licensed under [GPL-2.0-or-later](LICENSE).
