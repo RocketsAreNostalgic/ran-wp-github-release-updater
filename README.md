@@ -438,6 +438,9 @@ the repository publisher creates and reads back the tag and immutable GitHub
 source release with no uploaded asset; neither owner builds or uploads a
 consumer's ZIP.
 
+Release Please PRs must merge normally with two parents; squash and rebase
+merges are refused, and their releases must not be published manually.
+
 Repository admins enable immutable releases, then set the repository Actions
 variable `RAN_RELEASE_PUBLISHER_IMMUTABLE_RELEASES_ACKNOWLEDGED_REPOSITORY_ID`
 to this repository's numeric GitHub repository ID. The value authorizes only

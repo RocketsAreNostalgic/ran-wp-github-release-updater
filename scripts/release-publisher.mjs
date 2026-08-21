@@ -482,6 +482,56 @@ async function associatedPulls(repository, candidateSha) {
   );
 }
 
+async function hydrateReleasePullHeadTree(repository, candidateSha, pull) {
+  const headSha = pull?.head?.sha;
+  if (pull?.merge_commit_sha !== candidateSha || !FULL_SHA.test(headSha ?? "")) {
+    refuse(
+      "release_pr_invalid",
+      "Release Please head identity is invalid",
+    );
+  }
+  const response = await api(
+    `/repos/${repository}/git/commits/${headSha}`,
+  );
+  if (
+    response.data?.sha !== headSha ||
+    !FULL_SHA.test(response.data?.tree?.sha ?? "")
+  ) {
+    refuse(
+      "release_pr_head_tree_invalid",
+      "Release Please head tree readback is invalid",
+    );
+  }
+  return { ...pull, head_tree_sha: response.data.tree.sha };
+}
+
+async function hydrateReleasePullTrees(repository, candidateSha, pulls) {
+  const shaped = pulls.filter(releaseShaped);
+  const exactMerges = shaped.filter(
+    (pull) =>
+      pull?.state === "closed" &&
+      typeof pull?.merged_at === "string" &&
+      pull?.merge_commit_sha === candidateSha,
+  );
+  const staleMerges = shaped.filter(
+    (pull) =>
+      pull?.state === "closed" &&
+      typeof pull?.merged_at === "string" &&
+      pull?.merge_commit_sha !== candidateSha,
+  );
+  if (exactMerges.length !== 1 || staleMerges.length !== 0) {
+    return pulls;
+  }
+  const hydrated = await hydrateReleasePullHeadTree(
+    repository,
+    candidateSha,
+    exactMerges[0],
+  );
+  return pulls.map((pull) =>
+    pull === exactMerges[0] ? hydrated : pull,
+  );
+}
+
 async function remoteState(repository, tag) {
   const encoded = encodeURIComponent(tag);
   const [tagRef, release] = await Promise.all([
@@ -536,7 +586,7 @@ function candidateIdentityAt(root, candidateSha) {
   );
 }
 
-function localCommitFacts(root, candidateSha, pulls) {
+function localCommitFacts(root, candidateSha) {
   const parents = git(root, ["show", "--no-patch", "--format=%P", candidateSha])
     .split(/\s+/)
     .filter(Boolean);
@@ -574,24 +624,6 @@ function localCommitFacts(root, candidateSha, pulls) {
         }
       : verifyReleaseContentDelta(parentContents, candidateContents);
 
-  const exactPulls = pulls.map((pull) => {
-    if (
-      pull?.merge_commit_sha !== candidateSha ||
-      !FULL_SHA.test(pull?.head?.sha ?? "")
-    ) {
-      return pull;
-    }
-    return {
-      ...pull,
-      head_tree_sha: git(root, [
-        "show",
-        "--no-patch",
-        "--format=%T",
-        pull.head.sha,
-      ]),
-    };
-  });
-
   return {
     commit: {
       changedPaths,
@@ -600,7 +632,6 @@ function localCommitFacts(root, candidateSha, pulls) {
       sha: candidateSha,
       tree: { sha: treeSha },
     },
-    pulls: exactPulls,
   };
 }
 
@@ -642,14 +673,19 @@ export async function runPublisher(root = process.cwd()) {
     associatedPulls(repository, candidateSha),
     remoteState(repository, identity.tag),
   ]);
-  const local = localCommitFacts(root, candidateSha, pulls);
+  const local = localCommitFacts(root, candidateSha);
+  const pullsWithTrees = await hydrateReleasePullTrees(
+    repository,
+    candidateSha,
+    pulls,
+  );
   let input = {
     candidateSha,
     commit: local.commit,
     event,
     identity,
     mainSha: main.data?.object?.sha,
-    pulls: local.pulls,
+    pulls: pullsWithTrees,
     release: state.release,
     repository,
     repositoryId,
@@ -672,7 +708,12 @@ export async function runPublisher(root = process.cwd()) {
     associatedPulls(repository, candidateSha),
     remoteState(repository, identity.tag),
   ]);
-  const freshLocal = localCommitFacts(root, candidateSha, freshPulls);
+  const freshLocal = localCommitFacts(root, candidateSha);
+  const freshPullsWithTrees = await hydrateReleasePullTrees(
+    repository,
+    candidateSha,
+    freshPulls,
+  );
   input = {
     ...input,
     commit: freshLocal.commit,
@@ -683,7 +724,7 @@ export async function runPublisher(root = process.cwd()) {
           String(repositoryId)
         : undefined,
     mainSha: freshMain.data?.object?.sha,
-    pulls: freshLocal.pulls,
+    pulls: freshPullsWithTrees,
     release: freshState.release,
     tagRef: freshState.tagRef,
   };
@@ -718,15 +759,11 @@ export async function runPublisher(root = process.cwd()) {
   const finalPull = (
     await api(`/repos/${repository}/pulls/${decision.pullNumber}`)
   ).data;
-  const finalPullWithTree = {
-    ...finalPull,
-    head_tree_sha: git(root, [
-      "show",
-      "--no-patch",
-      "--format=%T",
-      finalPull.head.sha,
-    ]),
-  };
+  const finalPullWithTree = await hydrateReleasePullHeadTree(
+    repository,
+    candidateSha,
+    finalPull,
+  );
   validateReleasePull(
     finalPullWithTree,
     repository,
