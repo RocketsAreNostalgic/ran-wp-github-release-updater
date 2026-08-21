@@ -1,5 +1,15 @@
 # Changelog
 
+## [2.0.0-beta.7](https://github.com/RocketsAreNostalgic/ran-wp-github-release-updater/compare/v2.0.0-beta.6...v2.0.0-beta.7) (2026-08-21)
+
+
+### Bug Fixes
+
+* enforce updater target truth ([fdd403f](https://github.com/RocketsAreNostalgic/ran-wp-github-release-updater/commit/fdd403fb8c836b073985da242ab018874ffaa30c))
+* **release:** bind immutable acknowledgement to repository ([bb130b0](https://github.com/RocketsAreNostalgic/ran-wp-github-release-updater/commit/bb130b0b66fca6c48f2c178a74e6ebe4ab18e138))
+* **release:** replace inaccessible immutable preflight ([8cd33d9](https://github.com/RocketsAreNostalgic/ran-wp-github-release-updater/commit/8cd33d9599b1119ecc3372f963d7c8d9c2eed876))
+* surface selected runtime load failures ([f527514](https://github.com/RocketsAreNostalgic/ran-wp-github-release-updater/commit/f527514969fbc0a45184a9d792c7de73e073d286))
+
 ## [2.0.0-beta.6](https://github.com/RocketsAreNostalgic/ran-wp-github-release-updater/compare/v2.0.0-beta.5...v2.0.0-beta.6) (2026-08-17)
 
 
