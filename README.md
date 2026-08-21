@@ -440,6 +440,8 @@ consumer's ZIP.
 
 Release Please PRs must merge normally with two parents; squash and rebase
 merges are refused, and their releases must not be published manually.
+Version `2.0.0-beta.7` is intentionally unpublished because its release PR was
+squash-merged; the normal-merge release train resumes at `2.0.0-beta.8`.
 
 Repository admins enable immutable releases, then set the repository Actions
 variable `RAN_RELEASE_PUBLISHER_IMMUTABLE_RELEASES_ACKNOWLEDGED_REPOSITORY_ID`
