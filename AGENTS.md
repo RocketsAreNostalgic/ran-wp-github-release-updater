@@ -44,6 +44,17 @@ gates pass.
 - Preserve the plans and keep implementation changes focused.
 - Use `apply_patch` for manual file edits.
 - Run `composer check` before handoff.
+- Every pull request requires independent agent review after opening, against
+  its exact base and head SHAs. Prior source review, accepted commits,
+  integration preflight and green CI do not substitute for reviewing the actual
+  pull request tuple. Resolve or explicitly disposition every finding first.
+- Merging is always an owner decision. Implementation, integration, branch
+  push, pull-request creation, checks and release preparation do not authorize
+  an agent to merge. Present the exact pull request, base and head SHAs, merge
+  method, checks and unresolved risks, then merge only after the owner explicitly
+  authorizes that specific pull request. This includes Release Please pull
+  requests even when repository permissions or branch rules allow a direct
+  merge.
 - Keep `.dex`, `vendor`, caches, coverage and built fixture ZIPs untracked.
 - Do not create remote repositories, tags, releases or other GitHub state
   without separate authorization.
