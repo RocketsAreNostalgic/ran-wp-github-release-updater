@@ -3,9 +3,19 @@
 Beta releases are for controlled integration testing and are not covered by a
 backport policy.
 
-Report suspected vulnerabilities privately to the repository maintainers.
-Please do not include access tokens, signed URLs, WordPress credentials, raw
-HTTP responses, or temporary filesystem paths in a public issue.
+When GitHub's private vulnerability reporting form is available, report
+suspected vulnerabilities there:
+
+<https://github.com/RocketsAreNostalgic/ran-wp-github-release-updater/security/advisories/new>
+
+If that form is unavailable, open a public issue containing only a request for
+confidential contact:
+
+<https://github.com/RocketsAreNostalgic/ran-wp-github-release-updater/issues/new>
+
+Do not include access tokens, signed URLs, WordPress credentials, raw HTTP
+responses, temporary filesystem paths, or vulnerability details in a public
+issue.
 
 The current Beta trust boundary accepts public or authenticated GitHub Release
 assets only when the repository, exact release, tag commit, one uploaded ZIP
