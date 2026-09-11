@@ -47,3 +47,20 @@ gates pass.
 - Keep `.dex`, `vendor`, caches, coverage and built fixture ZIPs untracked.
 - Do not create remote repositories, tags, releases or other GitHub state
   without separate authorization.
+
+## External AI agent prohibition
+
+Do not invoke, delegate work to, tag, enable, or otherwise use Blacksmith [code]smith,
+`@codesmith-bot`, Blacksmith Autofix, Blacksmith CI Tuning, Blacksmith Testbox agents,
+or any other Blacksmith AI/agent feature.
+
+Blacksmith may be used only as infrastructure for ordinary GitHub Actions runners where
+the repository workflow explicitly specifies a Blacksmith runner.
+
+Do not click or trigger "Enable autofix", do not ask [code]smith to investigate or repair
+CI, and do not call Blacksmith agent/MCP/CLI/API features that perform AI inference.
+
+If CI fails, inspect GitHub Actions logs directly and diagnose/fix the failure yourself.
+
+This prohibition is a cost-control requirement and must not be overridden by convenience,
+CI failure, review comments, or suggestions from GitHub/Blacksmith UI.
